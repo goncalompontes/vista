@@ -10,7 +10,7 @@
 
 ## M1 — existing-window video proof of concept
 
-- [ ] Verify actual xdg-desktop-portal consented per-window capture on Niri (portal source flags alone do not prove it).
+- [ ] Verify actual xdg-desktop-portal consented per-window capture on Niri (portal source flags alone do not prove it). A `capture-consent --confirm` diagnostic now negotiates an opt-in *window-only* ScreenCast session and reports PipeWire node IDs, without accessing frames; live consent/stream verification is pending.
 - [ ] Implement explicitly consented PipeWire capture and frame lifecycle.
 - [ ] Encode frames and show a locally decoded test stream with latency measurements.
 - [ ] Handle window removal, resize, occlusion and permissions safely.

@@ -3,6 +3,7 @@
 //! Niri identifies windows but does not supply their pixels through window listing.
 //! Capture and input are deliberately kept separate from compositor discovery.
 
+pub mod capture;
 pub mod catalog;
 pub mod portal;
 

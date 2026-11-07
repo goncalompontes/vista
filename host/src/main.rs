@@ -10,6 +10,7 @@ struct HostCapabilities {
 
 fn usage() {
     eprintln!("Usage: vista-host <doctor|capabilities|windows|window ID|watch> [--json]");
+    eprintln!("       vista-host capture-consent --confirm [--json]");
 }
 
 fn run() -> Result<(), NiriError> {
@@ -77,6 +78,38 @@ fn run() -> Result<(), NiriError> {
                 println!(
                     "Niri per-window capture: NOT VERIFIED (advertised portal sources do not prove it works)"
                 );
+            }
+        }
+        [command, confirm]
+            if command.as_str() == "capture-consent" && confirm.as_str() == "--confirm" =>
+        {
+            eprintln!(
+                "Vista will ask the desktop portal to select one window. No frames are read or transmitted; the portal session is not persisted."
+            );
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let report = runtime
+                .block_on(vista_host::capture::consent_probe())
+                .map_err(|err| {
+                    NiriError::Unavailable(format!(
+                        "ScreenCast consent probe failed or was cancelled: {err}"
+                    ))
+                })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Portal session negotiated {} stream(s)",
+                    report.streams.len()
+                );
+                for stream in report.streams {
+                    println!(
+                        "PipeWire node {} (size: {:?}, position: {:?})",
+                        stream.pipewire_node_id, stream.size, stream.position
+                    );
+                }
+                println!("No pixels captured; arbitrary Niri window capture remains unverified.");
             }
         }
         [command] if command.as_str() == "watch" => watch_windows(json)?,

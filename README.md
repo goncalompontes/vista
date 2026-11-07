@@ -6,7 +6,7 @@ Inspired by [Sill](https://github.com/Saffsanity/sill); not a fork or a drop-in 
 
 ## Status
 
-**Milestone 0 — live Linux host discovery.** The Rust host CLI discovers running Niri windows by ID, emits an incremental event stream for the window catalog, and probes the desktop ScreenCast portal without requesting capture. The iOS/iPadOS SwiftUI preview is now in `client/`, with no network connection or media yet. Vista does **not** yet capture pixels, stream video, authenticate clients, or launch isolated sessions. See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).
+**Milestone 0 — live Linux host discovery.** The Rust host CLI discovers running Niri windows by ID, emits an incremental event stream for the window catalog, and probes the desktop ScreenCast portal without requesting capture. The iOS/iPadOS SwiftUI preview is now in `client/`, with no network connection or media yet. Vista does **not** yet capture pixels, stream video, authenticate clients, or launch isolated sessions. An opt-in `capture-consent` diagnostic can now request a single-window ScreenCast portal selection and report the negotiated PipeWire node IDs; it immediately releases the session without accessing pixels. See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).
 
 ## Develop
 
@@ -21,6 +21,8 @@ cargo run -- windows --json
 cargo run -- window 5 --json
 cargo run -- watch --json
 cargo run -- capabilities --json
+# Opens a desktop consent chooser; does NOT capture frames:
+cargo run -- capture-consent --confirm --json
 ```
 
 Window IDs come from the active Niri session and can change after a window closes or the compositor restarts. `--json` supports programmatic consumers. When running through a tool or service with a sanitized environment, export `NIRI_SOCKET` from the active Niri session before invoking the host CLI.
