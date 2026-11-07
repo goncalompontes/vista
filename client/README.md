@@ -134,10 +134,32 @@ and `-Xlinker` library paths, `-j 6` (not `-j6`), and a user-local
 `libxml2.so.2` symlink inside Swift 6.4.1's `usr/lib` so its `ld.lld` can run
 when Swift's build subprocesses clear `LD_LIBRARY_PATH`. These are build and
 CLI startup checks only, **not** proof that the VM boots or its Vulkan renderer works.
-The current kernel is `7.2.11-arch1-1` while installed `linux-headers`
-are `7.2.14.arch1-1`; booting into a matching installed kernel is needed
-before compiling the APFS module against those headers. Neither an iOS SDK
-nor accessible host GPU/KVM/VSOCK devices was verified inside DSH.
+The APFS driver (`linux-apfs-rw` at commit `0318712`, with the repository's
+`linux-apfs-rw-ios27.patch`) was built successfully at
+`vphone-linux/.build/linux-apfs-rw/apfs.ko` against installed **7.2.14**
+headers. `modinfo -F vermagic` reports `7.2.14-arch1-1 SMP preempt mod_unload`.
+**Do not load it into the still-running 7.2.11 kernel**: reboot into the
+installed 7.2.14 kernel and verify `uname -r` first. The module has not been
+loaded or exercised against an APFS filesystem.
+
+A later DSH Full Access verification established /dev/kvm, /dev/vhost-vsock,
+/dev/dri/renderD128 and /dev/nvidia0 access. Both Intel and NVIDIA Vulkan ICDs
+advertise `VK_EXT_external_memory_host`; actual reims-vgpu rendering and
+iOS guest boot remain unverified. The host has about 334 GiB free on /home,
+16 GiB free in /dev/shm, and 31 GiB RAM. `rcodesign` (`apple-codesign 0.29.0`)
+was installed to `~/.local/bin/rcodesign` and independently verified.
+`xtool sdk status` still reports **Not installed**; an authorized compatible
+Xcode archive is required for native IPA compilation.
+
+The real `setup/create-vm.sh` path remains **unrun**. Its restore stages need
+additional host utilities (`socat`, `rsync`, `sshfs`, `bc` were not found),
+interactive sudo authentication, and privileged USB/IP helpers. The patched
+`usbmuxd-32k.sh` stops, runtime-masks, and replaces the system
+`usbmuxd.service` during restore; undo the mask and restart the original
+service afterward. Review that service disruption before running the pipeline.
+The release bundle ROMs are available, but no completed virtual iPhone,
+GPU-driver extraction, installed native IPA, or live SwiftUI interaction has
+been verified.
 
 **Validation boundary:** the xtool package, simulator-like VM and native
 SwiftUI compilation must actually be exercised before describing the
