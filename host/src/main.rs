@@ -16,6 +16,7 @@ fn usage() {
     eprintln!("       vista-host capture-monitor --confirm [--json]");
     eprintln!("       vista-host encoders [--json]");
     eprintln!("       vista-host codec-test [--json]");
+    eprintln!("       vista-host bridge-test [--json]");
 }
 
 fn run() -> Result<(), NiriError> {
@@ -237,6 +238,26 @@ fn run() -> Result<(), NiriError> {
                     report.decoded_bytes,
                     report.width,
                     report.height,
+                    report.elapsed_ms
+                );
+            }
+        }
+        [command] if command.as_str() == "bridge-test" => {
+            eprintln!(
+                "Running bounded synthetic RGBA -> session -> H.264 encoding; no desktop capture or network access."
+            );
+            let report =
+                vista_host::bridge::synthetic_frame_bridge().map_err(NiriError::Unavailable)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Synthetic bridge verified: {:?}, {} input frames, {} encoded buffers, {} compressed bytes, {} dropped frames in {} ms.",
+                    report.encoder,
+                    report.input_frames,
+                    report.encoded_buffers,
+                    report.encoded_bytes,
+                    report.dropped_frames,
                     report.elapsed_ms
                 );
             }

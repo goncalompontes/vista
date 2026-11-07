@@ -25,6 +25,8 @@ cargo run -- capabilities --json
 cargo run -- encoders --json
 # Synthetic, permission-free bounded H.264 encode/decode test; requires working codec plugins:
 cargo run -- codec-test --json
+# Synthetic RGBA -> bounded StreamSession -> H.264 encoder bridge, no desktop access:
+cargo run -- bridge-test --json
 # Opens a desktop consent chooser; does NOT capture frames:
 cargo run -- capture-consent --confirm --json
 # Opens a desktop consent chooser; attempts one in-memory frame (no file or network output):
