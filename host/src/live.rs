@@ -108,6 +108,33 @@ fn validate_rgba(sample: &gst::Sample) -> Result<Vec<u8>, String> {
     pack_rgba_rows(plane, stride, WIDTH, HEIGHT)
 }
 
+/// GStreamer often reports source/codec failures asynchronously on the bus
+/// rather than from set_state or AppSink. Drain pending diagnostics before
+/// treating an empty source as timeout or returning a successful report.
+fn check_pipeline_error(pipeline: &gst::Pipeline, label: &str) -> Result<(), String> {
+    let bus = pipeline
+        .bus()
+        .ok_or_else(|| format!("{label} pipeline has no message bus"))?;
+    while let Some(message) = bus.pop() {
+        if let gst::MessageView::Error(error) = message.view() {
+            let details = error
+                .debug()
+                .map(|debug| format!("; {debug}"))
+                .unwrap_or_default();
+            return Err(format!(
+                "{label} pipeline error: {}{details}",
+                error.error()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn check_capture_errors(source: &gst::Pipeline, target: &gst::Pipeline) -> Result<(), String> {
+    check_pipeline_error(source, "capture source")?;
+    check_pipeline_error(target, "H.264 encoder")
+}
+
 fn drain_encoded(
     sink: &gst_app::AppSink,
     buffers: &mut usize,
@@ -185,6 +212,7 @@ fn bridge_pipeline(
                 session.revoke();
                 return Err("portal session closed during capture".into());
             }
+            check_capture_errors(source, &target)?;
             let wait = deadline.saturating_duration_since(Instant::now()).min(POLL);
             let ns = u64::try_from(wait.as_nanos()).unwrap_or(u64::MAX);
             if let Some(sample) = raw_sink.try_pull_sample(gst::ClockTime::from_nseconds(ns)) {
@@ -210,11 +238,13 @@ fn bridge_pipeline(
             } else if raw_sink.is_eos() {
                 break;
             }
+            check_capture_errors(source, &target)?;
         }
         if cancelled.load(Ordering::Acquire) {
             session.revoke();
             return Err("portal session closed during capture".into());
         }
+        check_capture_errors(source, &target)?;
         appsrc
             .end_of_stream()
             .map_err(|e| format!("cannot signal encoder EOS: {e}"))?;
@@ -224,6 +254,7 @@ fn bridge_pipeline(
                 session.revoke();
                 return Err("portal session closed while encoding".into());
             }
+            check_capture_errors(source, &target)?;
             let wait = deadline.saturating_duration_since(Instant::now()).min(POLL);
             let ns = u64::try_from(wait.as_nanos()).unwrap_or(u64::MAX);
             if let Some(sample) = encoded_sink.try_pull_sample(gst::ClockTime::from_nseconds(ns)) {
@@ -240,6 +271,7 @@ fn bridge_pipeline(
             }
         }
         drain_encoded(&encoded_sink, &mut encoded_buffers, &mut encoded_bytes)?;
+        check_capture_errors(source, &target)?;
         if input_frames == 0 || encoded_buffers == 0 {
             return Err("no frames encoded from selected source".into());
         }
@@ -351,12 +383,15 @@ pub async fn capture_h264_probe() -> Result<LiveBridgeReport, String> {
         tokio::pin!(closed);
         tokio::pin!(worker);
         tokio::select! {
-            result = &mut worker => result.map_err(|e| format!("capture worker panicked: {e}"))?,
+            // If a frame result and revocation become ready together, never
+            // claim successful capture after the portal has closed the grant.
+            biased;
             _ = closed.next() => {
                 cancelled.store(true, Ordering::Release);
                 let _ = worker.await;
                 Err("portal closed the authorized window session".into())
             }
+            result = &mut worker => result.map_err(|e| format!("capture worker panicked: {e}"))?,
         }
     }
     .await;
@@ -408,6 +443,49 @@ mod tests {
         assert!(validate_rgba(&sample).is_err());
     }
     #[test]
+    fn asynchronous_gstreamer_fault_is_reported_before_timeout() {
+        gst::init().unwrap();
+        let source =
+            pipeline("videotestsrc num-buffers=3 ! identity error-after=1 ! fakesink sync=false")
+                .unwrap();
+        source.set_state(gst::State::Playing).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let error = loop {
+            if let Err(error) = check_pipeline_error(&source, "capture source") {
+                break error;
+            }
+            assert!(Instant::now() < deadline, "expected a GStreamer bus error");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(error.contains("capture source pipeline error"), "{error}");
+        source.set_state(gst::State::Null).unwrap();
+        assert_eq!(source.current_state(), gst::State::Null);
+    }
+
+    #[test]
+    #[ignore = "requires functioning H.264 encoder plugins"]
+    fn failing_synthetic_capture_reports_bus_error_and_cleans_up() {
+        gst::init().unwrap();
+        let caps = probe_encoders().unwrap();
+        let encoder = [
+            (caps.nvidia, H264Encoder::Nvidia),
+            (caps.x264, H264Encoder::X264),
+            (caps.openh264, H264Encoder::OpenH264),
+        ]
+        .into_iter()
+        .find_map(|(available, e)| available.then_some(e))
+        .expect("a functional encoder is required");
+        let source = pipeline(
+            "videotestsrc num-buffers=8 is-live=true ! identity error-after=1 ! videoconvert ! video/x-raw,format=RGBA,width=320,height=180 ! appsink name=raw_sink sync=false max-buffers=2 drop=true",
+        )
+        .unwrap();
+        let cancelled = AtomicBool::new(false);
+        let error = bridge_pipeline(&source, encoder, 0, &cancelled).unwrap_err();
+        assert!(error.contains("capture source pipeline error"), "{error}");
+        assert_eq!(source.current_state(), gst::State::Null);
+    }
+
+    #[test]
     #[ignore = "requires functioning H.264 encoder plugins"]
     fn synthetic_source_uses_same_worker_boundary() {
         gst::init().unwrap();
@@ -428,6 +506,37 @@ mod tests {
         assert_eq!(result.input_frames, 8);
         assert!(result.encoded_buffers > 0);
     }
+    #[test]
+    #[ignore = "requires functioning H.264 encoder plugins"]
+    fn cancellation_interrupts_a_stalled_source_and_cleans_up() {
+        gst::init().unwrap();
+        let caps = probe_encoders().unwrap();
+        let encoder = [
+            (caps.nvidia, H264Encoder::Nvidia),
+            (caps.x264, H264Encoder::X264),
+            (caps.openh264, H264Encoder::OpenH264),
+        ]
+        .into_iter()
+        .find_map(|(available, e)| available.then_some(e))
+        .expect("a functional encoder is required");
+        let source = pipeline(
+            "appsrc is-live=true format=time caps=video/x-raw,format=RGBA,width=320,height=180,framerate=30/1 ! appsink name=raw_sink sync=false max-buffers=2 drop=true",
+        )
+        .unwrap();
+        let cancelled = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(100));
+                cancelled.store(true, Ordering::Release);
+            });
+            let start = Instant::now();
+            let error = bridge_pipeline(&source, encoder, 0, &cancelled).unwrap_err();
+            assert!(error.contains("portal session closed"), "{error}");
+            assert!(start.elapsed() < Duration::from_secs(2));
+        });
+        assert_eq!(source.current_state(), gst::State::Null);
+    }
+
     #[test]
     fn cancelled_worker_does_not_produce_frames() {
         gst::init().unwrap();
