@@ -35,6 +35,27 @@ fn frame_command_rejects_unexpected_arguments() {
 }
 
 #[test]
+fn burst_command_rejects_missing_confirmation() {
+    let output = Command::new(env!("CARGO_BIN_EXE_vista-host"))
+        .args(["capture-burst", "--json"])
+        .output()
+        .expect("launch host binary");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 diagnostics");
+    assert!(stderr.contains("capture-burst --confirm"));
+    assert!(stderr.contains("unknown command"));
+}
+
+#[test]
+fn burst_command_rejects_unexpected_arguments() {
+    let output = Command::new(env!("CARGO_BIN_EXE_vista-host"))
+        .args(["capture-burst", "--confirm", "--unexpected"])
+        .output()
+        .expect("launch host binary");
+    assert!(!output.status.success());
+}
+
+#[test]
 fn capture_command_rejects_unexpected_arguments() {
     let output = Command::new(env!("CARGO_BIN_EXE_vista-host"))
         .args(["capture-consent", "--confirm", "--unexpected"])

@@ -25,6 +25,8 @@ cargo run -- capabilities --json
 cargo run -- capture-consent --confirm --json
 # Opens a desktop consent chooser; attempts one in-memory frame (no file or network output):
 cargo run -- capture-frame --confirm --json
+# Opens a desktop consent chooser; inspects up to eight transient frames (no file or network output):
+cargo run -- capture-burst --confirm --json
 ```
 
 Window IDs come from the active Niri session and can change after a window closes or the compositor restarts. `--json` supports programmatic consumers. When running through a tool or service with a sanitized environment, export `NIRI_SOCKET` from the active Niri session before invoking the host CLI.
