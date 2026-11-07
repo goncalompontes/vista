@@ -1,0 +1,34 @@
+# Vista
+
+Vista is an open-source native application-streaming platform for Linux hosts and iPhone/iPad clients. It aims to stream **existing Wayland windows** and **independent remote application sessions**, with touch, keyboard, pointer, audio, and clipboard support.
+
+Inspired by [Sill](https://github.com/Saffsanity/sill); not a fork or a drop-in Sill backend.
+
+## Status
+
+**Milestone 0 — initial Linux host discovery.** The Rust host CLI can discover running Niri windows by ID, report metadata and check Niri IPC health. It does **not** yet capture pixels, stream video, authenticate clients, launch isolated sessions, or provide an iOS app. See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).
+
+## Develop
+
+Requirements: Rust/Cargo, a running Niri compositor and the `niri` executable on PATH.
+
+```sh
+cd host
+cargo test
+cargo run -- doctor
+cargo run -- windows
+cargo run -- windows --json
+cargo run -- window 5 --json
+```
+
+Window IDs come from the active Niri session and can change after a window closes or the compositor restarts. `--json` supports programmatic consumers. When running through a tool or service with a sanitized environment, export `NIRI_SOCKET` from the active Niri session before invoking the host CLI.
+
+## Repository layout
+
+- `host/`: Rust Linux host service foundation, currently the Niri discovery CLI.
+- `docs/architecture.md`: host, transport, iOS, compositing and session architecture.
+- `docs/roadmap.md`: phased implementation and acceptance milestones.
+
+## Principles
+
+Native-first, least privilege, compositor-aware integration without patching Niri, clear separation of window discovery/capture/encoding/transport/input, and no false claims that isolated Wayland sessions can be created solely through an existing Niri window.
