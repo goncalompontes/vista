@@ -28,35 +28,45 @@ pub struct ConsentProbeReport {
 
 /// May display a desktop portal dialog; only call for an explicit opt-in.
 /// Restricts the portal's source selector to a single window, with no restore
-/// token and no PipeWire connection. The session closes when dropped.
+/// token and no PipeWire connection. Explicitly closes the portal session.
 pub async fn consent_probe() -> Result<ConsentProbeReport, ashpd::Error> {
     let portal = Screencast::new().await?;
     let session = portal.create_session(Default::default()).await?;
-    portal
-        .select_sources(
-            &session,
-            SelectSourcesOptions::default()
-                .set_cursor_mode(CursorMode::Embedded)
-                .set_sources(enumflags2::BitFlags::from(SourceType::Window))
-                .set_multiple(false)
-                .set_persist_mode(PersistMode::DoNot),
-        )
-        .await?;
+    // Always attempt to close the session, including cancellation and failures.
+    let negotiation = async {
+        portal
+            .select_sources(
+                &session,
+                SelectSourcesOptions::default()
+                    .set_cursor_mode(CursorMode::Embedded)
+                    .set_sources(enumflags2::BitFlags::from(SourceType::Window))
+                    .set_multiple(false)
+                    .set_persist_mode(PersistMode::DoNot),
+            )
+            .await?;
 
-    // The portal may reject this request, or the user can cancel the chooser.
-    let response = portal
-        .start(&session, None, Default::default())
-        .await?
-        .response()?;
-    let streams = response
-        .streams()
-        .iter()
-        .map(|stream| NegotiatedStream {
-            pipewire_node_id: stream.pipe_wire_node_id(),
-            size: stream.size(),
-            position: stream.position(),
-        })
-        .collect();
+        // The portal may reject this request, or the user can cancel the chooser.
+        let response = portal
+            .start(&session, None, Default::default())
+            .await?
+            .response()?;
+        Ok::<_, ashpd::Error>(
+            response
+                .streams()
+                .iter()
+                .map(|stream| NegotiatedStream {
+                    pipewire_node_id: stream.pipe_wire_node_id(),
+                    size: stream.size(),
+                    position: stream.position(),
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+    .await;
+
+    let close_result = session.close().await;
+    let streams = negotiation?;
+    close_result?;
 
     Ok(ConsentProbeReport {
         portal_session_started: true,
