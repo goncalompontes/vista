@@ -6,7 +6,7 @@ Inspired by [Sill](https://github.com/Saffsanity/sill); not a fork or a drop-in 
 
 ## Status
 
-**Milestone 0 — live Linux host discovery.** The Rust host CLI discovers running Niri windows by ID, emits an incremental event stream for the window catalog, and probes the desktop ScreenCast portal without requesting capture. It does **not** yet capture pixels, stream video, authenticate clients, launch isolated sessions, or provide an iOS app. See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).
+**Milestone 0 — live Linux host discovery.** The Rust host CLI discovers running Niri windows by ID, emits an incremental event stream for the window catalog, and probes the desktop ScreenCast portal without requesting capture. The iOS/iPadOS SwiftUI preview is now in `client/`, with no network connection or media yet. Vista does **not** yet capture pixels, stream video, authenticate clients, or launch isolated sessions. See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).
 
 ## Develop
 
@@ -28,6 +28,7 @@ Window IDs come from the active Niri session and can change after a window close
 ## Repository layout
 
 - `host/`: Rust Linux host service foundation, including Niri window discovery, live window catalog events, and read-only portal capability diagnostics.
+- `client/`: native iOS/iPadOS SwiftUI preview and portable Swift models; see [client setup](client/README.md).
 - `docs/architecture.md`: host, transport, iOS, compositing and session architecture.
 - `docs/roadmap.md`: phased implementation and acceptance milestones.
 

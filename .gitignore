@@ -2,3 +2,7 @@
 /host/target/
 .DS_Store
 *.swp
+/client/core/.build/
+/client/core/.swiftpm/
+/client/ios/*.xcodeproj/
+/client/ios/DerivedData/

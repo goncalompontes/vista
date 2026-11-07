@@ -24,7 +24,8 @@
 
 ## M3 — iOS/iPadOS client
 
-- [ ] SwiftUI application and host discovery/pairing.
+- [x] Initial SwiftUI iPhone/iPad interface and portable Swift model package (preview data only; macOS build verification pending).
+- [ ] Actual host discovery, authenticated pairing and live catalog integration.
 - [ ] Hardware video decoder, responsive native input and keyboard UX.
 - [ ] App launcher/gallery informed by Sill's polished UX.
 - [ ] Audio, clipboard, session reconnect and background handling.
