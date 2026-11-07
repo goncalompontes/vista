@@ -88,7 +88,10 @@ as a SHA-256-verified AppImage, extracted under
 DSH sandbox. The vphone-linux source and its pinned submodules were
 checked out at `~/lsm-workspace/vphone-linux`; no VM has booted yet.
 
-The remaining prerequisites are a Linux Swift toolchain, an Apple Xcode
+Swiftly and the pinned **Swift 6.4.1** user-local toolchain have now been
+installed; `swift --version` succeeds, but `swift package dump-package`
+currently fails because Arch's `libxml2-legacy` (`libxml2.so.2`) is missing.
+The remaining prerequisites are that system library, an Apple Xcode
 `.xip`/iOS SDK (not bundled or downloadable by Vista), the vphone
 system dependencies, working NVIDIA Vulkan device access and the VM's
 firmware/restore procedure. The observed DSH shell has no `/dev/dri`,
