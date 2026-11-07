@@ -117,6 +117,28 @@ Arch packages included `lld`, `python-setuptools`, `rsync`,
 the upstream setup script. Review that script before granting sudo,
 as it can modify kernel module, udev and sysctl settings.
 
+**Additional vphone build validation (2026-11-07):** The pinned
+`reims-vgpu` Vulkan distribution built successfully, and the QEMU
+`qemu-system-aarch64` build completed with exit code 0. The resulting
+338 MB executable reports `qemu-vphone-0.1.0_QEMU-10.2.2_10.1.3_hybrid`
+and lists the custom `vresearch101` machine. A user-local copy of
+`libslirp` initially had incorrect `/usr` paths in its `slirp.pc` metadata;
+correcting that staged metadata and supplying the local include/library paths
+to Meson resolved the QEMU compilation failure. The patched
+`usbmuxd 1.1.1-32k` restore helper also compiled successfully. The Swift
+`vphone-cli` firmware tooling also built successfully and its `--help` ran
+(exit code 0); the 122 MB executable is at
+`vphone-linux/linux-create/.build/out/out/Products/Debug-linux-x86_64/vphone-cli`.
+On this Arch host, the firmware build required explicit `-Xcc` LZFSE include
+and `-Xlinker` library paths, `-j 6` (not `-j6`), and a user-local
+`libxml2.so.2` symlink inside Swift 6.4.1's `usr/lib` so its `ld.lld` can run
+when Swift's build subprocesses clear `LD_LIBRARY_PATH`. These are build and
+CLI startup checks only, **not** proof that the VM boots or its Vulkan renderer works.
+The current kernel is `7.2.11-arch1-1` while installed `linux-headers`
+are `7.2.14.arch1-1`; booting into a matching installed kernel is needed
+before compiling the APFS module against those headers. Neither an iOS SDK
+nor accessible host GPU/KVM/VSOCK devices was verified inside DSH.
+
 **Validation boundary:** the xtool package, simulator-like VM and native
 SwiftUI compilation must actually be exercised before describing the
 environment as working; static project files alone are not a validated setup.
