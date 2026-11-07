@@ -17,7 +17,7 @@ let package = Package(
         .target(
             name: "Vista",
             dependencies: [
-                .product(name: "VistaCore", package: "VistaCore")
+                .product(name: "VistaCore", package: "core")
             ],
             path: "Vista"
         )

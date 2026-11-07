@@ -88,13 +88,26 @@ as a SHA-256-verified AppImage, extracted under
 DSH sandbox. The vphone-linux source and its pinned submodules were
 checked out at `~/lsm-workspace/vphone-linux`; no VM has booted yet.
 
-Swiftly and the pinned **Swift 6.4.1** user-local toolchain have now been
-installed; `swift --version` succeeds, but `swift package dump-package`
-currently fails because Arch's `libxml2-legacy` (`libxml2.so.2`) is missing.
-The remaining prerequisites are that system library, an Apple Xcode
-`.xip`/iOS SDK (not bundled or downloadable by Vista), the vphone
-system dependencies, working NVIDIA Vulkan device access and the VM's
-firmware/restore procedure. The observed DSH shell has no `/dev/dri`,
+Swiftly and **Swift 6.4.1** are installed. The Arch `libxml2-legacy`
+package (`2.13.9-2`) was downloaded and extracted *without system changes*
+into `~/.local/opt/libxml2-legacy-2.13.9-2/`; it is **not** installed by
+pacman. For a Swift command in the DSH environment, supply the extracted
+runtime library on its own search path:
+
+```sh
+export PATH="$HOME/.local/share/swiftly/bin:$PATH"
+export LD_LIBRARY_PATH="$HOME/.local/opt/libxml2-legacy-2.13.9-2/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+swift package dump-package --package-path client/ios
+swift test --package-path client/core
+```
+
+On 2026-11-07, both manifests parsed successfully and all **4 VistaCore
+Swift tests passed**. The iOS manifest was corrected to use the local
+SwiftPM dependency identity `core` (while importing the `VistaCore` product).
+This validates package metadata and portable models, **not** a native iOS
+binary. The remaining prerequisites are an Apple Xcode `.xip`/iOS SDK,
+the vphone system dependencies, working NVIDIA Vulkan device access and
+the VM's firmware/restore procedure. The observed DSH shell has no `/dev/dri`,
 `/dev/nvidia*` or `/dev/vhost-vsock`, even though the host PCI
 device is detected; check from a normal unsandboxed Niri terminal
 before diagnosing the driver itself. Required but currently missing
