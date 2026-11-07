@@ -11,7 +11,7 @@
 ## M1 — existing-window video proof of concept
 
 - [ ] Verify actual xdg-desktop-portal consented per-window capture on Niri (portal source flags alone do not prove it). A `capture-consent --confirm` diagnostic now negotiates an opt-in *window-only* ScreenCast session and reports PipeWire node IDs, without accessing frames; live consent/stream verification is pending.
-- [ ] Implement explicitly consented PipeWire capture and frame lifecycle. A bounded single-frame GStreamer diagnostic is implemented and compiles, but manual desktop/portal verification and a reusable streaming lifecycle are pending.
+- [ ] Implement explicitly consented PipeWire capture and frame lifecycle. A bounded single-frame GStreamer diagnostic and reusable sample reader have 2 synthetic tests (one frame and timeout/cleanup), but manual desktop/portal verification and a continuous streaming lifecycle are pending.
 - [ ] Encode frames and show a locally decoded test stream with latency measurements.
 - [ ] Handle window removal, resize, occlusion and permissions safely.
 
@@ -27,7 +27,7 @@
 - [x] Initial SwiftUI iPhone/iPad interface and portable Swift model package (preview data only; macOS build verification pending).
 - [ ] Actual host discovery, authenticated pairing and live catalog integration.
 - [ ] Hardware video decoder, responsive native input and keyboard UX.
-- [ ] App launcher/gallery informed by Sill's polished UX.
+- [ ] App launcher/gallery informed by Sill's polished UX. See [Sill UI source reference and reuse map](sill-reference.md) before implementing iOS screens.
 - [ ] Audio, clipboard, session reconnect and background handling.
 
 ## M4 — independent remote applications

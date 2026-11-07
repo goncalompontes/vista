@@ -112,6 +112,17 @@ fn sample_first_frame(fd: OwnedFd, node_id: u32) -> Result<FrameMetadata, String
     let pipeline = element
         .downcast::<gst::Pipeline>()
         .map_err(|_| "GStreamer returned a non-pipeline element".to_string())?;
+    // The portal-owned FD stays alive through the pipeline shutdown.
+    read_bounded_sample(&pipeline, node_id, FRAME_WAIT)
+}
+
+/// Testable GStreamer boundary shared by the restricted PipeWire source and
+/// synthetic, permission-free sources. Always shuts the pipeline down.
+fn read_bounded_sample(
+    pipeline: &gst::Pipeline,
+    node_id: u32,
+    timeout: Duration,
+) -> Result<FrameMetadata, String> {
     let result = (|| {
         let sink = pipeline
             .by_name("frame_sink")
@@ -121,10 +132,11 @@ fn sample_first_frame(fd: OwnedFd, node_id: u32) -> Result<FrameMetadata, String
         let started = Instant::now();
         pipeline
             .set_state(gst::State::Playing)
-            .map_err(|e| format!("cannot start PipeWire pipeline: {e}"))?;
+            .map_err(|e| format!("cannot start capture pipeline: {e}"))?;
+        let timeout_ns = u64::try_from(timeout.as_nanos()).unwrap_or(u64::MAX);
         let sample = sink
-            .try_pull_sample(gst::ClockTime::from_nseconds(FRAME_WAIT.as_nanos() as u64))
-            .ok_or_else(|| "no video frame received within five seconds".to_string())?;
+            .try_pull_sample(gst::ClockTime::from_nseconds(timeout_ns))
+            .ok_or_else(|| format!("no video frame received within {} ms", timeout.as_millis()))?;
         let buffer = sample
             .buffer()
             .ok_or_else(|| "received sample without buffer".to_string())?;
@@ -136,6 +148,9 @@ fn sample_first_frame(fd: OwnedFd, node_id: u32) -> Result<FrameMetadata, String
             .ok_or_else(|| "sample caps contain no structure".to_string())?;
         let width = structure.get::<i32>("width").ok();
         let height = structure.get::<i32>("height").ok();
+        if width.is_none_or(|w| w <= 0) || height.is_none_or(|h| h <= 0) {
+            return Err("received sample without valid video dimensions".to_string());
+        }
         if buffer.size() == 0 {
             return Err("received empty video frame".to_string());
         }
@@ -147,9 +162,14 @@ fn sample_first_frame(fd: OwnedFd, node_id: u32) -> Result<FrameMetadata, String
             elapsed_ms: started.elapsed().as_millis(),
         })
     })();
-    let _ = pipeline.set_state(gst::State::Null);
-    // The portal-owned FD stays alive through the pipeline shutdown.
-    result
+    let shutdown = pipeline
+        .set_state(gst::State::Null)
+        .map_err(|e| format!("could not stop capture pipeline: {e}"));
+    match (result, shutdown) {
+        (Ok(metadata), Ok(_)) => Ok(metadata),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -215,4 +235,40 @@ pub async fn consent_probe() -> Result<ConsentProbeReport, ashpd::Error> {
         frames_captured: false,
         arbitrary_window_capture_verified: false,
     })
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+
+    #[test]
+    fn synthetic_source_produces_one_bounded_rgba_frame() {
+        gst::init().unwrap();
+        let pipeline = gst::parse::launch(
+            "videotestsrc num-buffers=1 ! video/x-raw,width=32,height=24,format=RGBA ! appsink name=frame_sink sync=false max-buffers=1",
+        )
+        .unwrap()
+        .downcast::<gst::Pipeline>()
+        .unwrap();
+        let metadata = read_bounded_sample(&pipeline, 17, Duration::from_secs(2)).unwrap();
+        assert_eq!(metadata.pipewire_node_id, 17);
+        assert_eq!(metadata.width, Some(32));
+        assert_eq!(metadata.height, Some(24));
+        assert_eq!(metadata.bytes, 32 * 24 * 4);
+        assert_eq!(pipeline.current_state(), gst::State::Null);
+    }
+
+    #[test]
+    fn unproductive_source_times_out_and_shuts_down() {
+        gst::init().unwrap();
+        let pipeline = gst::parse::launch(
+            "appsrc is-live=true format=time ! video/x-raw,width=32,height=24,format=RGBA ! appsink name=frame_sink sync=false max-buffers=1",
+        )
+        .unwrap()
+        .downcast::<gst::Pipeline>()
+        .unwrap();
+        let error = read_bounded_sample(&pipeline, 17, Duration::from_millis(50)).unwrap_err();
+        assert!(error.contains("no video frame received"), "{error}");
+        assert_eq!(pipeline.current_state(), gst::State::Null);
+    }
 }
