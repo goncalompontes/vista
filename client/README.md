@@ -34,6 +34,78 @@ This tests models, **not** the SwiftUI application. Apple's iOS SDK, Xcode,
 SwiftUI build environment and official iOS Simulator require macOS. Linux
 cannot independently validate the final iOS application bundle.
 
+## Native iOS development on Arch with vphone-linux (experimental)
+
+Unlike the browser preview, [vphone-linux](https://github.com/YahiaAngelo/vphone-linux)
+runs patched genuine iOS firmware under an x86-64 QEMU ARM emulator.
+The [xtool](https://github.com/xtool-org/xtool) path builds this repository's
+**actual SwiftUI sources**, installs an IPA inside the guest and launches it.
+This is development-only: guest graphics, networking, audio, and performance
+do not represent a physical iPhone; licensing terms may restrict iOS virtualization
+on non-Apple hardware.
+
+Setup prerequisites:
+
+1. Install vphone-linux in a separate checkout (default: `~/lsm-workspace/vphone-linux`).
+   Its own `setup/setup.sh` installs system dependencies and builds QEMU;
+   `setup/create-vm.sh` builds a virtual iPhone from Apple firmware. Consult its
+   setup instructions and review any root/system changes before proceeding.
+   It needs a Vulkan-capable GPU, 16 GiB+ RAM, at least 100 GiB free space,
+   and approximately 8 GiB free in `/dev/shm`.
+2. Ensure `nvidia-smi` and `vulkaninfo --summary` can see the **real** GPU in
+   your desktop session. Sandboxed agent shells can hide `/dev/nvidia*`
+   and `/dev/dri`, so GPU diagnostics there may not reflect the host.
+3. Install [xtool](https://xtool.sh/documentation/xtooldocs/installation-linux)
+   and a compatible Linux Swift toolchain. Obtain Xcode's `.xip` via Apple's
+   developer downloads using your Apple account; run `xtool sdk install` on
+   the downloaded archive and `xtool sdk status`. The iOS SDK is not bundled
+   with Vista or vphone-linux.
+4. Start the VM with `~/lsm-workspace/vphone-linux/setup/start-vm.sh`.
+   Confirm its vphoned control interface responds before installing applications.
+
+Both XcodeGen (`client/ios/project.yml`) and xtool
+(`client/ios/Package.swift`, `client/ios/xtool.yml`) compile the same
+`client/ios/Vista/` SwiftUI files, with the common `client/core` package.
+Keep deployment targets, bundle IDs and target source dependencies in sync.
+
+```sh
+cd client/ios
+./vphone.sh check    # xtool SDK status and VM health
+./vphone.sh build    # SwiftUI -> unsigned xtool/Vista.ipa
+./vphone.sh run      # build, install, launch as dev.vista.client
+./vphone.sh logs     # Vista log entries
+./vphone.sh crashes  # Vista crash reports
+```
+
+Set `VPHONE_HOME` to point at a different vphone-linux checkout, and
+`VPHONE_CID` if the guest uses a vsock CID other than 3. The helper uses
+vphone-linux's own IPA installer and vphoned diagnostic tooling.
+
+**Current setup status (2026-11-07):** `xtool 1.24.0` was installed
+as a SHA-256-verified AppImage, extracted under
+`~/.local/opt/xtool-1.24.0/squashfs-root/` and exposed at
+`~/.local/bin/xtool`. This avoids FUSE, which was unavailable inside the
+DSH sandbox. The vphone-linux source and its pinned submodules were
+checked out at `~/lsm-workspace/vphone-linux`; no VM has booted yet.
+
+The remaining prerequisites are a Linux Swift toolchain, an Apple Xcode
+`.xip`/iOS SDK (not bundled or downloadable by Vista), the vphone
+system dependencies, working NVIDIA Vulkan device access and the VM's
+firmware/restore procedure. The observed DSH shell has no `/dev/dri`,
+`/dev/nvidia*` or `/dev/vhost-vsock`, even though the host PCI
+device is detected; check from a normal unsandboxed Niri terminal
+before diagnosing the driver itself. Required but currently missing
+Arch packages included `lld`, `python-setuptools`, `rsync`,
+`libslirp`, `vulkan-headers`, `dtc`, `socat`, `sshfs` and
+`libxml2-legacy`; `lzfse` is also absent and built from AUR by
+the upstream setup script. Review that script before granting sudo,
+as it can modify kernel module, udev and sysctl settings.
+
+**Validation boundary:** the xtool package, simulator-like VM and native
+SwiftUI compilation must actually be exercised before describing the
+environment as working; static project files alone are not a validated setup.
+Keep the macOS build/test path as an independent verification source.
+
 ## Building on a Mac
 
 Install a supported Xcode release and the XcodeGen generator:
