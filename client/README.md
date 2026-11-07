@@ -10,6 +10,11 @@ are made, and no desktop pixels are captured or transmitted.
 - `core/`: `VistaCore` Swift Package; portable models and tests.
 - `ios/project.yml`: XcodeGen source for the iOS app project.
 - `ios/Vista/`: SwiftUI UI shell for iPhone and iPad.
+- `preview/`: interactive browser-only iPhone/iPad frame and navigation for rapid UI debugging on Linux (not a simulator).
+
+## Interactive preview on Arch Linux
+
+Run `cd client/preview && ./serve.sh`, then open `http://127.0.0.1:4173/` in Firefox. Use F12 and Ctrl+Shift+M for JavaScript debugging, responsive layouts and touch emulation. The HTML/CSS/JS preview mirrors the SwiftUI shell manually, but **does not execute SwiftUI or iOS code**. See [preview setup](preview/README.md).
 
 ## Working from Arch Linux
 
@@ -45,8 +50,8 @@ iPhone/iPad, sign into an Apple Account in Xcode and configure your own
 development team and bundle identifier if needed. Free personal teams support
 temporary on-device provisioning with restrictions.
 
-The GitHub Actions `ios.yml` workflow builds the iOS Simulator target on a
-macOS runner without device signing and runs `VistaCore` tests. The generated
+A local, unpublished `.github/workflows/ios.yml` workflow draft builds the iOS Simulator target on a
+macOS runner without device signing and runs `VistaCore` tests. Publishing it is blocked until the GitHub OAuth token has `workflow` scope. The generated
 `Vista.xcodeproj` is ignored; regenerate it from `project.yml`.
 
 ## Next integration milestones

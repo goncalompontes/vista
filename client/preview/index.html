@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e111b">
+  <title>Vista — iOS UI preview</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <main class="preview-workspace">
+    <aside class="inspector" aria-label="Preview controls">
+      <div class="brand-row"><div class="brand-icon">▣</div><div><h1>Vista Preview</h1><p>iOS concept · Arch Linux</p></div></div>
+      <div class="inspector-section">
+        <p class="eyebrow">DEVICE SIZE</p>
+        <div class="segmented" role="group" aria-label="Simulated screen width">
+          <button type="button" class="device-button active" data-device="iphone" aria-pressed="true">iPhone</button>
+          <button type="button" class="device-button" data-device="ipad" aria-pressed="false">iPad</button>
+        </div>
+        <p class="hint">Use Firefox responsive mode (Ctrl+Shift+M) for precise viewport and touch emulation.</p>
+      </div>
+      <div class="inspector-section">
+        <p class="eyebrow">NAVIGATION</p>
+        <button type="button" class="inspector-nav" data-go="welcome">Welcome</button>
+        <button type="button" class="inspector-nav" data-go="library">App library</button>
+        <button type="button" class="inspector-nav" data-go="stream">Stream placeholder</button>
+      </div>
+      <div class="inspector-section">
+        <p class="eyebrow">DEBUG</p>
+        <div class="status-line"><span class="dot"></span> Local static preview</div>
+        <div class="debug-values">
+          <span>Screen</span><strong id="debug-screen">welcome</strong>
+          <span>Filter</span><strong id="debug-filter">all</strong>
+          <span>Selected</span><strong id="debug-app">none</strong>
+        </div>
+        <button type="button" class="reset-button" id="reset-preview">Reset preview</button>
+      </div>
+      <p class="warning">Not an iOS emulator. This browser preview mirrors the SwiftUI screen flow; it cannot build, run or debug SwiftUI, VideoToolbox or native iOS APIs.</p>
+    </aside>
+    <section class="stage" aria-label="iOS preview screen">
+      <div class="device-shell iphone" id="device-shell">
+        <div class="device-camera" aria-hidden="true"></div>
+        <div class="device-screen" id="device-screen">
+          <div class="statusbar" aria-hidden="true"><strong>9:41</strong><span>●●●  ▰</span></div>
+          <div id="app-root" aria-live="polite"></div>
+          <div class="home-indicator" aria-hidden="true"></div>
+        </div>
+      </div>
+      <p class="stage-note">Sample content only — nothing is paired, captured or streamed.</p>
+    </section>
+  </main>
+</body>
+</html>

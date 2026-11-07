@@ -28,7 +28,7 @@ Window IDs come from the active Niri session and can change after a window close
 ## Repository layout
 
 - `host/`: Rust Linux host service foundation, including Niri window discovery, live window catalog events, and read-only portal capability diagnostics.
-- `client/`: native iOS/iPadOS SwiftUI preview and portable Swift models; see [client setup](client/README.md).
+- `client/`: native iOS/iPadOS SwiftUI shell, portable Swift models, and an [interactive Arch browser preview](client/preview/README.md) for UI iteration; see [client setup](client/README.md).
 - `docs/architecture.md`: host, transport, iOS, compositing and session architecture.
 - `docs/roadmap.md`: phased implementation and acceptance milestones.
 
