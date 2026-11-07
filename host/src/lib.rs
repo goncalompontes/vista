@@ -7,6 +7,7 @@ pub mod capture;
 pub mod catalog;
 pub mod media;
 pub mod portal;
+pub mod session;
 
 use serde::{Deserialize, Serialize};
 use std::env;
