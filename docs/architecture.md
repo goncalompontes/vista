@@ -51,4 +51,4 @@ Explicit pairing, mutual authenticated session keys, least-privilege capture and
 
 ### State of implementation
 
-Only Niri window discovery and a diagnostic CLI have been implemented. All other components above are architectural targets, not current features.
+Niri window discovery, incremental window catalog events and a read-only desktop portal ScreenCast capability probe are implemented. On the tested system, ScreenCast version 5 advertises source mask 7 (monitor/window/virtual-monitor) and cursor mask 7; this does **not** verify Niri-specific per-window capture or grant permission to record. Actual consented capture, encoding, transport, input, isolation and the iOS client remain architectural targets.

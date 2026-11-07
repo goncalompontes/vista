@@ -6,7 +6,7 @@ Inspired by [Sill](https://github.com/Saffsanity/sill); not a fork or a drop-in 
 
 ## Status
 
-**Milestone 0 — initial Linux host discovery.** The Rust host CLI can discover running Niri windows by ID, report metadata and check Niri IPC health. It does **not** yet capture pixels, stream video, authenticate clients, launch isolated sessions, or provide an iOS app. See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).
+**Milestone 0 — live Linux host discovery.** The Rust host CLI discovers running Niri windows by ID, emits an incremental event stream for the window catalog, and probes the desktop ScreenCast portal without requesting capture. It does **not** yet capture pixels, stream video, authenticate clients, launch isolated sessions, or provide an iOS app. See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).
 
 ## Develop
 
@@ -19,13 +19,15 @@ cargo run -- doctor
 cargo run -- windows
 cargo run -- windows --json
 cargo run -- window 5 --json
+cargo run -- watch --json
+cargo run -- capabilities --json
 ```
 
 Window IDs come from the active Niri session and can change after a window closes or the compositor restarts. `--json` supports programmatic consumers. When running through a tool or service with a sanitized environment, export `NIRI_SOCKET` from the active Niri session before invoking the host CLI.
 
 ## Repository layout
 
-- `host/`: Rust Linux host service foundation, currently the Niri discovery CLI.
+- `host/`: Rust Linux host service foundation, including Niri window discovery, live window catalog events, and read-only portal capability diagnostics.
 - `docs/architecture.md`: host, transport, iOS, compositing and session architecture.
 - `docs/roadmap.md`: phased implementation and acceptance milestones.
 

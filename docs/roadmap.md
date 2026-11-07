@@ -5,12 +5,12 @@
 - [x] Initialize project structure and Rust host crate.
 - [x] Niri window metadata discovery and JSON CLI, with mocked transport tests.
 - [x] Live Niri IPC smoke test.
-- [ ] Niri event stream subscription and window catalog reconciliation.
-- [ ] Compositor capability probe and structured errors.
+- [x] Niri event stream subscription and window catalog reconciliation.
+- [x] Read-only Niri and desktop portal ScreenCast capability probe with structured partial failures (not a proof of functional window capture).
 
 ## M1 — existing-window video proof of concept
 
-- [ ] Verify xdg-desktop-portal backend and Niri per-window capture capabilities.
+- [ ] Verify actual xdg-desktop-portal consented per-window capture on Niri (portal source flags alone do not prove it).
 - [ ] Implement explicitly consented PipeWire capture and frame lifecycle.
 - [ ] Encode frames and show a locally decoded test stream with latency measurements.
 - [ ] Handle window removal, resize, occlusion and permissions safely.

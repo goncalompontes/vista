@@ -1,9 +1,15 @@
 use std::env;
 use std::process::ExitCode;
-use vista_host::{Niri, NiriError};
+use vista_host::{Niri, NiriError, portal, watch_windows};
+
+#[derive(serde::Serialize)]
+struct HostCapabilities {
+    niri: vista_host::DoctorReport,
+    screen_cast: portal::ScreenCastReport,
+}
 
 fn usage() {
-    eprintln!("Usage: vista-host <doctor|windows|window ID> [--json]");
+    eprintln!("Usage: vista-host <doctor|capabilities|windows|window ID|watch> [--json]");
 }
 
 fn run() -> Result<(), NiriError> {
@@ -34,6 +40,46 @@ fn run() -> Result<(), NiriError> {
                 ));
             }
         }
+        [command] if command.as_str() == "capabilities" => {
+            let report = HostCapabilities {
+                niri: niri.doctor(),
+                screen_cast: portal::probe(),
+            };
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("Niri responding: {}", report.niri.compositor_responding);
+                println!(
+                    "ScreenCast portal responding: {}",
+                    report.screen_cast.portal_responding
+                );
+                if let Some(version) = report.screen_cast.interface_version {
+                    println!("ScreenCast interface version: {version}");
+                }
+                if let Some(source) = &report.screen_cast.source_types {
+                    println!(
+                        "Portal advertised capture sources: monitor={} window={} virtual_monitor={} (mask={})",
+                        source.monitor, source.window, source.virtual_monitor, source.raw
+                    );
+                }
+                if let Some(cursor) = &report.screen_cast.cursor_modes {
+                    println!(
+                        "Portal advertised cursor modes: hidden={} embedded={} metadata={} (mask={})",
+                        cursor.hidden, cursor.embedded, cursor.metadata, cursor.raw
+                    );
+                }
+                for error in &report.screen_cast.errors {
+                    eprintln!("ScreenCast probe: {error}");
+                }
+                if let Some(error) = &report.niri.error {
+                    eprintln!("Niri probe: {error}");
+                }
+                println!(
+                    "Niri per-window capture: NOT VERIFIED (advertised portal sources do not prove it works)"
+                );
+            }
+        }
+        [command] if command.as_str() == "watch" => watch_windows(json)?,
         [command] if command.as_str() == "windows" => {
             let windows = niri.windows()?;
             if json {

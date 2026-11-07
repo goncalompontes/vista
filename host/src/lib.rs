@@ -3,11 +3,14 @@
 //! Niri identifies windows but does not supply their pixels through window listing.
 //! Capture and input are deliberately kept separate from compositor discovery.
 
+pub mod catalog;
+pub mod portal;
+
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt;
-use std::io;
-use std::process::Command;
+use std::io::{self, BufReader};
+use std::process::{Command, Stdio};
 
 #[derive(Debug)]
 pub enum NiriError {
@@ -132,6 +135,30 @@ impl<T: NiriTransport> Niri<T> {
             error: result.err().map(|error| error.to_string()),
         }
     }
+}
+
+/// Follow Niri's event stream and emit a resumable, snapshot-first window catalog.
+/// This intentionally does not request any screen/window pixels.
+pub fn watch_windows(json: bool) -> Result<(), NiriError> {
+    let mut child = Command::new("niri")
+        .args(["msg", "--json", "event-stream"])
+        .stdout(Stdio::piped())
+        .spawn()?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        NiriError::Unavailable("Niri event stream stdout was not available".into())
+    })?;
+    let result = catalog::relay_events(BufReader::new(stdout), io::stdout().lock(), json);
+    if result.is_err() {
+        let _ = child.kill();
+    }
+    let status = child.wait()?;
+    result?;
+    if !status.success() {
+        return Err(NiriError::Unavailable(format!(
+            "Niri event stream terminated with {status}"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
