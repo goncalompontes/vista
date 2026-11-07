@@ -45,6 +45,10 @@ Existing Niri can create headless/virtual outputs in some configurations, but a 
 
 Prototype video path: portal/compositor capture → PipeWire frames → VA-API/NVENC/FFmpeg or GStreamer encoder → low-latency transport (prefer WebRTC for initial NAT traversal, encryption, congestion control) → VideoToolbox decoder. Do not choose a fixed codec/zero-copy path without benchmarking hardware. Audio needs its own routed source and synchronized playback. Messages and clipboard require consent and bounded payloads.
 
+### Media capability discovery
+
+The Rust host has an independent H.264 encoder capability probe. It ranks GStreamer NVENC, x264 and OpenH264 element availability, requiring `h264parse`, and provides a bounded `videotestsrc` pipeline description with at most two queued encoded buffers. Element discovery alone does **not** prove codec initialization. The independent `vista-host codec-test --json` command builds a bounded 30-frame synthetic GStreamer pipeline with H.264 compression, a two-branch tee and bounded leaky queues, validating both compressed samples and 640×360 RGBA decoded samples. It attempts NVENC, x264 and OpenH264 in order when installed, and selects an installed H.264 decoder; a failed codec path falls back to the next available combination. On the tested NVIDIA host, `nvh264enc` and `nvh264dec` successfully produced real encoded and decoded buffers. This is not a PipeWire or network test, and the diagnostic's elapsed time is not streaming latency. Each attempt switches the pipeline to `Null` on success or error. No encoder is currently connected to a live capture session, transport or iOS decoder.
+
 ### Security
 
 Explicit pairing, mutual authenticated session keys, least-privilege capture and control, visible session revocation, no unauthenticated host listening, no arbitrary command execution from client messages. Isolated process != security sandbox; define filesystem, network, credentials, seat and clipboard exposure before promising app isolation.

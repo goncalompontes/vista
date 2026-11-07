@@ -14,6 +14,8 @@ fn usage() {
     eprintln!("       vista-host capture-frame --confirm [--json]");
     eprintln!("       vista-host capture-burst --confirm [--json]");
     eprintln!("       vista-host capture-monitor --confirm [--json]");
+    eprintln!("       vista-host encoders [--json]");
+    eprintln!("       vista-host codec-test [--json]");
 }
 
 fn run() -> Result<(), NiriError> {
@@ -197,6 +199,46 @@ fn run() -> Result<(), NiriError> {
                     report.frames, report.elapsed_ms, report.resize_events, report.termination
                 );
                 println!("Arbitrary Niri window-ID capture remains unverified.");
+            }
+        }
+        [command] if command.as_str() == "encoders" => {
+            let report = vista_host::media::probe_encoders().map_err(NiriError::Unavailable)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "H.264 encoder factories: NVENC={} x264={} OpenH264={}",
+                    report.nvidia, report.x264, report.openh264
+                );
+                println!(
+                    "H.264 parser={} decoder factory={}",
+                    report.h264_parser, report.decoder_available
+                );
+                println!(
+                    "Preferred encoder: {:?} (availability only; encoding not verified)",
+                    report.selected
+                );
+            }
+        }
+        [command] if command.as_str() == "codec-test" => {
+            eprintln!(
+                "Running a bounded synthetic H.264 encode/decode test; no screen capture or network access."
+            );
+            let report =
+                vista_host::media::synthetic_h264_round_trip().map_err(NiriError::Unavailable)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "H.264 round-trip verified with {:?} -> {}: {} compressed bytes, {} decoded bytes at {}x{} in {} ms.",
+                    report.encoder,
+                    report.decoder,
+                    report.encoded_bytes,
+                    report.decoded_bytes,
+                    report.width,
+                    report.height,
+                    report.elapsed_ms
+                );
             }
         }
         [command] if command.as_str() == "watch" => watch_windows(json)?,

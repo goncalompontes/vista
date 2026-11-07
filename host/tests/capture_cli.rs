@@ -1,6 +1,37 @@
 use std::process::Command;
 
 #[test]
+fn codec_test_rejects_unexpected_arguments() {
+    let output = Command::new(env!("CARGO_BIN_EXE_vista-host"))
+        .args(["codec-test", "--confirm"])
+        .output()
+        .expect("launch host binary");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown command"));
+}
+
+#[test]
+fn encoder_probe_returns_json_without_capture_permission() {
+    let output = Command::new(env!("CARGO_BIN_EXE_vista-host"))
+        .args(["encoders", "--json"])
+        .output()
+        .expect("launch host binary");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(report["nvidia"].is_boolean());
+    assert!(report["x264"].is_boolean());
+    assert!(report["openh264"].is_boolean());
+    assert!(report["h264_parser"].is_boolean());
+    assert!(report["decoder_available"].is_boolean());
+    assert!(report["selected"].is_null() || report["selected"].is_string());
+}
+
+#[test]
 fn monitor_command_requires_confirmation_and_rejects_extra_flags() {
     for args in [
         vec!["capture-monitor", "--json"],
