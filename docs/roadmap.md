@@ -11,7 +11,7 @@
 ## M1 — existing-window video proof of concept
 
 - [ ] Verify actual xdg-desktop-portal consented per-window capture on Niri (portal source flags alone do not prove it). A `capture-consent --confirm` diagnostic now negotiates an opt-in *window-only* ScreenCast session and reports PipeWire node IDs, without accessing frames; live consent/stream verification is pending.
-- [ ] Implement explicitly consented PipeWire capture and frame lifecycle. Bounded single-frame and eight-frame GStreamer diagnostics have synthetic frame, partial-sequence timeout, and cleanup tests; manual desktop/portal verification and an indefinite streaming lifecycle are pending.
+- [ ] Implement explicitly consented PipeWire capture and frame lifecycle. Bounded single-frame and eight-frame GStreamer diagnostics have synthetic frame, partial-sequence timeout, and cleanup tests. Both readers now validate RGBA caps, dimensions, and frame-buffer bounds, including negative tests. Burst reads distinguish a terminated stream from a silent timeout and test cleanup in both cases. A three-second/120-frame aggregate-only capture monitor now exercises a longer-lived capture lifecycle with bounded AppSink buffering; synthetic EOS, timeout, invalid-cap and frame-limit tests verify shutdown. Manual desktop/portal verification and an indefinite streaming lifecycle are pending.
 - [ ] Encode frames and show a locally decoded test stream with latency measurements.
 - [ ] Handle window removal, resize, occlusion and permissions safely.
 

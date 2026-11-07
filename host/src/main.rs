@@ -13,6 +13,7 @@ fn usage() {
     eprintln!("       vista-host capture-consent --confirm [--json]");
     eprintln!("       vista-host capture-frame --confirm [--json]");
     eprintln!("       vista-host capture-burst --confirm [--json]");
+    eprintln!("       vista-host capture-monitor --confirm [--json]");
 }
 
 fn run() -> Result<(), NiriError> {
@@ -168,6 +169,32 @@ fn run() -> Result<(), NiriError> {
                     report.frames.len(),
                     report.elapsed_ms,
                     report.resize_events
+                );
+                println!("Arbitrary Niri window-ID capture remains unverified.");
+            }
+        }
+        [command, confirm]
+            if command.as_str() == "capture-monitor" && confirm.as_str() == "--confirm" =>
+        {
+            eprintln!(
+                "Vista will request one window and monitor transient frames for at most 3 seconds or 120 frames. No pixels are saved or transmitted; permissions are not persisted."
+            );
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let report = runtime
+                .block_on(vista_host::capture::capture_monitor_probe())
+                .map_err(|err| {
+                    NiriError::Unavailable(format!(
+                        "ScreenCast monitor failed or was cancelled: {err}"
+                    ))
+                })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Observed {} transient window frames in {} ms ({} resize events; termination: {:?}); no pixels saved or transmitted.",
+                    report.frames, report.elapsed_ms, report.resize_events, report.termination
                 );
                 println!("Arbitrary Niri window-ID capture remains unverified.");
             }

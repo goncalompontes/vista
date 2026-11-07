@@ -219,30 +219,7 @@ fn read_bounded_sample(
         let sample = sink
             .try_pull_sample(gst::ClockTime::from_nseconds(timeout_ns))
             .ok_or_else(|| format!("no video frame received within {} ms", timeout.as_millis()))?;
-        let buffer = sample
-            .buffer()
-            .ok_or_else(|| "received sample without buffer".to_string())?;
-        let caps = sample
-            .caps()
-            .ok_or_else(|| "received sample without caps".to_string())?;
-        let structure = caps
-            .structure(0)
-            .ok_or_else(|| "sample caps contain no structure".to_string())?;
-        let width = structure.get::<i32>("width").ok();
-        let height = structure.get::<i32>("height").ok();
-        if width.is_none_or(|w| w <= 0) || height.is_none_or(|h| h <= 0) {
-            return Err("received sample without valid video dimensions".to_string());
-        }
-        if buffer.size() == 0 {
-            return Err("received empty video frame".to_string());
-        }
-        Ok(FrameMetadata {
-            pipewire_node_id: node_id,
-            width,
-            height,
-            bytes: buffer.size(),
-            elapsed_ms: started.elapsed().as_millis(),
-        })
+        frame_metadata(&sample, node_id, started.elapsed())
     })();
     let shutdown = pipeline
         .set_state(gst::State::Null)
@@ -252,6 +229,50 @@ fn read_bounded_sample(
         (Err(error), _) => Err(error),
         (Ok(_), Err(error)) => Err(error),
     }
+}
+
+/// Validates the negotiated raw-video shape before treating a sample as an RGBA frame.
+/// Stride padding is allowed, but truncated or unexpectedly large buffers are rejected.
+fn frame_metadata(
+    sample: &gst::Sample,
+    node_id: u32,
+    elapsed: Duration,
+) -> Result<FrameMetadata, String> {
+    const MAX_FRAME_BYTES: usize = 256 * 1024 * 1024;
+    let buffer = sample.buffer().ok_or("received sample without buffer")?;
+    let caps = sample.caps().ok_or("received sample without caps")?;
+    let structure = caps
+        .structure(0)
+        .ok_or("sample caps contain no structure")?;
+    if structure.name() != "video/x-raw" || structure.get::<&str>("format").ok() != Some("RGBA") {
+        return Err("received sample without RGBA video caps".into());
+    }
+    let width = structure.get::<i32>("width").ok().filter(|v| *v > 0);
+    let height = structure.get::<i32>("height").ok().filter(|v| *v > 0);
+    let (Some(w), Some(h)) = (width, height) else {
+        return Err("received sample without valid video dimensions".into());
+    };
+    let expected_bytes = usize::try_from(w)
+        .ok()
+        .and_then(|w| usize::try_from(h).ok().and_then(|h| w.checked_mul(h)))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or("invalid or overflowing RGBA dimensions")?;
+    if buffer.size() < expected_bytes {
+        return Err(format!(
+            "truncated RGBA frame: {} bytes, expected at least {expected_bytes}",
+            buffer.size()
+        ));
+    }
+    if buffer.size() > MAX_FRAME_BYTES {
+        return Err("RGBA frame exceeds the diagnostic size limit".into());
+    }
+    Ok(FrameMetadata {
+        pipewire_node_id: node_id,
+        width,
+        height,
+        bytes: buffer.size(),
+        elapsed_ms: elapsed.as_millis(),
+    })
 }
 
 /// Reads a bounded number of live samples without keeping pixel buffers.
@@ -290,32 +311,20 @@ fn read_frame_sequence(
             let sample = sink
                 .try_pull_sample(gst::ClockTime::from_nseconds(ns))
                 .ok_or_else(|| {
-                    format!(
-                        "received {} of {frame_limit} frames within {} ms",
-                        frames.len(),
-                        timeout.as_millis()
-                    )
+                    if sink.is_eos() {
+                        format!(
+                            "capture stream ended after {} of {frame_limit} frames",
+                            frames.len()
+                        )
+                    } else {
+                        format!(
+                            "received {} of {frame_limit} frames within {} ms",
+                            frames.len(),
+                            timeout.as_millis()
+                        )
+                    }
                 })?;
-            let buffer = sample.buffer().ok_or("received sample without buffer")?;
-            let caps = sample.caps().ok_or("received sample without caps")?;
-            let structure = caps
-                .structure(0)
-                .ok_or("sample caps contain no structure")?;
-            let width = structure.get::<i32>("width").ok();
-            let height = structure.get::<i32>("height").ok();
-            if width.is_none_or(|w| w <= 0) || height.is_none_or(|h| h <= 0) {
-                return Err("received sample without valid dimensions".into());
-            }
-            if buffer.size() == 0 {
-                return Err("received empty video frame".into());
-            }
-            frames.push(FrameMetadata {
-                pipewire_node_id: node_id,
-                width,
-                height,
-                bytes: buffer.size(),
-                elapsed_ms: start.elapsed().as_millis(),
-            });
+            frames.push(frame_metadata(&sample, node_id, start.elapsed())?);
         }
         Ok(frames)
     })();
@@ -324,6 +333,159 @@ fn read_frame_sequence(
         .map_err(|e| format!("could not stop capture pipeline: {e}"));
     match (result, shutdown) {
         (Ok(frames), Ok(_)) => Ok(frames),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+    }
+}
+
+const MONITOR_DURATION: Duration = Duration::from_secs(3);
+const MONITOR_MAX_FRAMES: usize = 120;
+
+#[derive(Debug, Serialize)]
+pub struct CaptureMonitorReport {
+    pub portal_session_started: bool,
+    pub pipewire_node_id: u32,
+    pub frames: usize,
+    pub resize_events: usize,
+    pub first_frame_ms: Option<u128>,
+    pub elapsed_ms: u128,
+    pub termination: MonitorTermination,
+    pub arbitrary_window_capture_verified: bool,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MonitorTermination {
+    Deadline,
+    FrameLimit,
+    EndOfStream,
+}
+
+/// Opens a fresh window-only desktop chooser and automatically stops capture.
+pub async fn capture_monitor_probe() -> Result<CaptureMonitorReport, String> {
+    let portal = Screencast::new().await.map_err(|e| e.to_string())?;
+    let session = portal
+        .create_session(Default::default())
+        .await
+        .map_err(|e| e.to_string())?;
+    let result = async {
+        portal
+            .select_sources(
+                &session,
+                SelectSourcesOptions::default()
+                    .set_cursor_mode(CursorMode::Embedded)
+                    .set_sources(enumflags2::BitFlags::from(SourceType::Window))
+                    .set_multiple(false)
+                    .set_persist_mode(PersistMode::DoNot),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let response = portal
+            .start(&session, None, Default::default())
+            .await
+            .map_err(|e| e.to_string())?
+            .response()
+            .map_err(|e| e.to_string())?;
+        let streams = response.streams();
+        if streams.len() != 1 || streams[0].source_type() != Some(SourceType::Window) {
+            return Err("portal did not grant exactly one window stream".into());
+        }
+        let node = streams[0].pipe_wire_node_id();
+        let fd = portal
+            .open_pipe_wire_remote(&session, Default::default())
+            .await
+            .map_err(|e| e.to_string())?;
+        tokio::task::spawn_blocking(move || sample_capture_monitor(fd, node))
+            .await
+            .map_err(|e| format!("capture worker failed: {e}"))?
+    }
+    .await;
+    let close = session.close().await.map_err(|e| e.to_string());
+    let report = result?;
+    close?;
+    Ok(report)
+}
+
+fn sample_capture_monitor(fd: OwnedFd, node_id: u32) -> Result<CaptureMonitorReport, String> {
+    gst::init().map_err(|e| format!("GStreamer initialization: {e}"))?;
+    let description = format!(
+        "pipewiresrc fd={} target-object={} do-timestamp=true ! videoconvert ! video/x-raw,format=RGBA ! appsink name=frame_sink sync=false max-buffers=2 drop=true",
+        fd.as_raw_fd(),
+        node_id
+    );
+    let pipeline = gst::parse::launch(&description)
+        .map_err(|e| format!("GStreamer pipeline: {e}"))?
+        .downcast::<gst::Pipeline>()
+        .map_err(|_| "GStreamer returned a non-pipeline element".to_string())?;
+    monitor_pipeline(&pipeline, node_id, MONITOR_DURATION, MONITOR_MAX_FRAMES)
+}
+
+/// Accumulates only frame metadata; the AppSink is limited to two queued buffers.
+/// Shutdown is attempted after EOS, deadline, frame cap, and sample errors.
+fn monitor_pipeline(
+    pipeline: &gst::Pipeline,
+    node_id: u32,
+    duration: Duration,
+    max_frames: usize,
+) -> Result<CaptureMonitorReport, String> {
+    if duration.is_zero() || max_frames == 0 {
+        return Err("capture monitor requires a positive duration and frame limit".into());
+    }
+    let result = (|| {
+        let sink = pipeline
+            .by_name("frame_sink")
+            .ok_or_else(|| "frame_sink missing".to_string())?
+            .downcast::<gst_app::AppSink>()
+            .map_err(|_| "frame_sink has wrong type".to_string())?;
+        let started = Instant::now();
+        let deadline = started + duration;
+        pipeline
+            .set_state(gst::State::Playing)
+            .map_err(|e| format!("cannot start capture pipeline: {e}"))?;
+        let mut frames = 0;
+        let mut resize_events = 0;
+        let mut last_dimensions = None;
+        let mut first_frame_ms = None;
+        let termination = loop {
+            if frames == max_frames {
+                break MonitorTermination::FrameLimit;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break MonitorTermination::Deadline;
+            }
+            let ns = u64::try_from(remaining.as_nanos()).unwrap_or(u64::MAX);
+            match sink.try_pull_sample(gst::ClockTime::from_nseconds(ns)) {
+                Some(sample) => {
+                    let metadata = frame_metadata(&sample, node_id, started.elapsed())?;
+                    let dimensions = (metadata.width, metadata.height);
+                    if last_dimensions.is_some_and(|last| last != dimensions) {
+                        resize_events += 1;
+                    }
+                    last_dimensions = Some(dimensions);
+                    first_frame_ms.get_or_insert(metadata.elapsed_ms);
+                    frames += 1;
+                }
+                None if sink.is_eos() => break MonitorTermination::EndOfStream,
+                None => break MonitorTermination::Deadline,
+            }
+        };
+        Ok(CaptureMonitorReport {
+            portal_session_started: true,
+            pipewire_node_id: node_id,
+            frames,
+            resize_events,
+            first_frame_ms,
+            elapsed_ms: started.elapsed().as_millis(),
+            termination,
+            arbitrary_window_capture_verified: false,
+        })
+    })();
+    let shutdown = pipeline
+        .set_state(gst::State::Null)
+        .map_err(|e| format!("could not stop capture pipeline: {e}"));
+    match (result, shutdown) {
+        (Ok(report), Ok(_)) => Ok(report),
         (Err(error), _) => Err(error),
         (Ok(_), Err(error)) => Err(error),
     }
@@ -398,6 +560,44 @@ pub async fn consent_probe() -> Result<ConsentProbeReport, ashpd::Error> {
 mod frame_tests {
     use super::*;
 
+    fn synthetic_sample(format: &str, width: i32, height: i32, bytes: usize) -> gst::Sample {
+        let caps = gst::Caps::builder("video/x-raw")
+            .field("format", format)
+            .field("width", width)
+            .field("height", height)
+            .build();
+        gst::Sample::builder()
+            .buffer(&gst::Buffer::with_size(bytes).unwrap())
+            .caps(&caps)
+            .build()
+    }
+
+    #[test]
+    fn rejects_non_rgba_and_truncated_samples() {
+        gst::init().unwrap();
+        let rgb = synthetic_sample("RGB", 32, 24, 32 * 24 * 3);
+        let err = frame_metadata(&rgb, 9, Duration::ZERO).unwrap_err();
+        assert!(err.contains("RGBA video caps"), "{err}");
+
+        let truncated = synthetic_sample("RGBA", 32, 24, 32 * 24 * 4 - 1);
+        let err = frame_metadata(&truncated, 9, Duration::ZERO).unwrap_err();
+        assert!(err.contains("truncated RGBA frame"), "{err}");
+
+        let invalid = synthetic_sample("RGBA", 0, 24, 32 * 24 * 4);
+        let err = frame_metadata(&invalid, 9, Duration::ZERO).unwrap_err();
+        assert!(err.contains("valid video dimensions"), "{err}");
+    }
+
+    #[test]
+    fn accepts_padded_rgba_buffers() {
+        gst::init().unwrap();
+        let sample = synthetic_sample("RGBA", 32, 24, 32 * 24 * 4 + 128);
+        let metadata = frame_metadata(&sample, 42, Duration::from_millis(12)).unwrap();
+        assert_eq!(metadata.bytes, 3200);
+        assert_eq!(metadata.elapsed_ms, 12);
+        assert_eq!(metadata.pipewire_node_id, 42);
+    }
+
     #[test]
     fn synthetic_source_produces_one_bounded_rgba_frame() {
         gst::init().unwrap();
@@ -432,14 +632,74 @@ mod frame_tests {
     }
 
     #[test]
-    fn incomplete_sequence_times_out_and_cleans_up() {
+    fn incomplete_sequence_reports_eos_and_cleans_up() {
         gst::init().unwrap();
         let pipeline = gst::parse::launch(
             "videotestsrc num-buffers=1 ! video/x-raw,width=32,height=24,format=RGBA ! appsink name=frame_sink sync=false max-buffers=2",
         ).unwrap().downcast::<gst::Pipeline>().unwrap();
         let error = read_frame_sequence(&pipeline, 17, 2, Duration::from_millis(200)).unwrap_err();
-        assert!(error.contains("received 1 of 2 frames"), "{error}");
+        assert!(
+            error.contains("capture stream ended after 1 of 2 frames"),
+            "{error}"
+        );
         assert_eq!(pipeline.current_state(), gst::State::Null);
+    }
+
+    #[test]
+    fn silent_sequence_reports_timeout_and_cleans_up() {
+        gst::init().unwrap();
+        let pipeline = gst::parse::launch(
+            "appsrc is-live=true format=time ! video/x-raw,width=32,height=24,format=RGBA ! appsink name=frame_sink sync=false max-buffers=2",
+        ).unwrap().downcast::<gst::Pipeline>().unwrap();
+        let error = read_frame_sequence(&pipeline, 17, 2, Duration::from_millis(50)).unwrap_err();
+        assert!(error.contains("received 0 of 2 frames"), "{error}");
+        assert_eq!(pipeline.current_state(), gst::State::Null);
+    }
+
+    #[test]
+    fn monitor_stops_on_frame_limit_and_cleans_up() {
+        gst::init().unwrap();
+        let pipeline = gst::parse::launch(
+            "videotestsrc is-live=true ! video/x-raw,width=32,height=24,format=RGBA ! appsink name=frame_sink sync=false max-buffers=2 drop=true",
+        ).unwrap().downcast::<gst::Pipeline>().unwrap();
+        let report = monitor_pipeline(&pipeline, 7, Duration::from_secs(2), 3).unwrap();
+        assert_eq!(report.frames, 3);
+        assert_eq!(report.termination, MonitorTermination::FrameLimit);
+        assert!(report.first_frame_ms.is_some());
+        assert!(!report.arbitrary_window_capture_verified);
+        assert_eq!(pipeline.current_state(), gst::State::Null);
+    }
+
+    #[test]
+    fn monitor_distinguishes_eos_from_deadline() {
+        gst::init().unwrap();
+        let eos = gst::parse::launch(
+            "videotestsrc num-buffers=2 ! video/x-raw,width=32,height=24,format=RGBA ! appsink name=frame_sink sync=false max-buffers=3",
+        ).unwrap().downcast::<gst::Pipeline>().unwrap();
+        let report = monitor_pipeline(&eos, 7, Duration::from_secs(2), 5).unwrap();
+        assert_eq!(report.frames, 2);
+        assert_eq!(report.termination, MonitorTermination::EndOfStream);
+        assert_eq!(eos.current_state(), gst::State::Null);
+
+        let silent = gst::parse::launch(
+            "appsrc is-live=true format=time ! video/x-raw,width=32,height=24,format=RGBA ! appsink name=frame_sink sync=false max-buffers=2",
+        ).unwrap().downcast::<gst::Pipeline>().unwrap();
+        let report = monitor_pipeline(&silent, 7, Duration::from_millis(50), 5).unwrap();
+        assert_eq!(report.frames, 0);
+        assert_eq!(report.termination, MonitorTermination::Deadline);
+        assert!(report.first_frame_ms.is_none());
+        assert_eq!(silent.current_state(), gst::State::Null);
+    }
+
+    #[test]
+    fn monitor_rejects_invalid_frames_and_shuts_down() {
+        gst::init().unwrap();
+        let invalid = gst::parse::launch(
+            "videotestsrc num-buffers=1 ! video/x-raw,width=32,height=24,format=RGB ! appsink name=frame_sink sync=false max-buffers=2",
+        ).unwrap().downcast::<gst::Pipeline>().unwrap();
+        let error = monitor_pipeline(&invalid, 7, Duration::from_secs(2), 2).unwrap_err();
+        assert!(error.contains("RGBA video caps"), "{error}");
+        assert_eq!(invalid.current_state(), gst::State::Null);
     }
 
     #[test]
