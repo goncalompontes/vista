@@ -6,6 +6,7 @@
 pub mod bridge;
 pub mod capture;
 pub mod catalog;
+pub mod live;
 pub mod media;
 pub mod portal;
 pub mod session;

@@ -17,6 +17,7 @@ fn usage() {
     eprintln!("       vista-host encoders [--json]");
     eprintln!("       vista-host codec-test [--json]");
     eprintln!("       vista-host bridge-test [--json]");
+    eprintln!("       vista-host capture-h264 --confirm [--json]");
 }
 
 fn run() -> Result<(), NiriError> {
@@ -260,6 +261,36 @@ fn run() -> Result<(), NiriError> {
                     report.dropped_frames,
                     report.elapsed_ms
                 );
+            }
+        }
+        [command, confirm]
+            if command.as_str() == "capture-h264" && confirm.as_str() == "--confirm" =>
+        {
+            eprintln!(
+                "Vista will request one window and briefly encode its frames in memory. No video is saved or transmitted; permissions are not persisted."
+            );
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let report = runtime
+                .block_on(vista_host::live::capture_h264_probe())
+                .map_err(|err| {
+                    NiriError::Unavailable(format!(
+                        "ScreenCast H.264 diagnostic failed or was cancelled: {err}"
+                    ))
+                })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Encoded {} selected-window frames into {} H.264 buffers ({} bytes) in {} ms with {:?}; no pixels were saved or transmitted.",
+                    report.input_frames,
+                    report.encoded_buffers,
+                    report.encoded_bytes,
+                    report.elapsed_ms,
+                    report.encoder
+                );
+                println!("Arbitrary Niri window-ID capture remains unverified.");
             }
         }
         [command] if command.as_str() == "watch" => watch_windows(json)?,

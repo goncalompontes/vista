@@ -6,7 +6,7 @@ Inspired by [Sill](https://github.com/Saffsanity/sill); not a fork or a drop-in 
 
 ## Status
 
-**Milestone 0 — live Linux host discovery.** The Rust host CLI discovers running Niri windows by ID, emits an incremental event stream for the window catalog, and probes the desktop ScreenCast portal without requesting capture. The iOS/iPadOS SwiftUI preview is now in `client/`, with no network connection or media yet. Vista does **not** yet have a verified live pixel-capture path, stream video, authenticate clients, or launch isolated sessions. An opt-in `capture-consent` diagnostic requests a single-window ScreenCast selection and reports negotiated PipeWire nodes, then closes the session without accessing pixels. A separate opt-in `capture-frame` diagnostic now attempts to read exactly one selected window frame in memory through the portal-authorized PipeWire remote, returning only timing/size metadata. It has compiled but has not yet been verified against a manually approved desktop chooser. See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).
+**Milestone 0 — live Linux host discovery.** The Rust host CLI discovers running Niri windows by ID, emits an incremental event stream for the window catalog, and probes the desktop ScreenCast portal without requesting capture. The iOS/iPadOS SwiftUI preview is now in `client/`, with no network connection or media yet. Vista does **not** yet have an interactively verified live pixel-capture path, network video streaming, authenticated clients, or isolated application sessions. The opt-in `capture-h264 --confirm` diagnostic now wires a portal-approved window to PipeWire, bounded RGBA handling and an in-memory H.264 encoder, but requires manual desktop approval to verify the actual live path. An opt-in `capture-consent` diagnostic requests a single-window ScreenCast selection and reports negotiated PipeWire nodes, then closes the session without accessing pixels. A separate opt-in `capture-frame` diagnostic now attempts to read exactly one selected window frame in memory through the portal-authorized PipeWire remote, returning only timing/size metadata. It has compiled but has not yet been verified against a manually approved desktop chooser. See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).
 
 ## Develop
 
@@ -35,6 +35,8 @@ cargo run -- capture-frame --confirm --json
 cargo run -- capture-burst --confirm --json
 # Opens a desktop consent chooser; observes transient frames for at most 3 seconds or 120 frames:
 cargo run -- capture-monitor --confirm --json
+# Explicit window-only consent; transient PipeWire RGBA -> StreamSession -> H.264 (up to 8 frames / 5 seconds):
+cargo run -- capture-h264 --confirm --json
 ```
 
 Window IDs come from the active Niri session and can change after a window closes or the compositor restarts. `--json` supports programmatic consumers. When running through a tool or service with a sanitized environment, export `NIRI_SOCKET` from the active Niri session before invoking the host CLI.

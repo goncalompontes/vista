@@ -1,5 +1,24 @@
 use std::process::Command;
 
+/// Invalid CLI usage must never reach the desktop permission chooser.
+#[test]
+fn h264_capture_requires_explicit_confirmation() {
+    for args in [
+        vec!["capture-h264"],
+        vec!["capture-h264", "--json"],
+        vec!["capture-h264", "--confirm", "--unexpected"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_vista-host"))
+            .args(args)
+            .output()
+            .expect("launch host binary");
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("capture-h264 --confirm"), "{stderr}");
+        assert!(stderr.contains("unknown command"), "{stderr}");
+    }
+}
+
 #[test]
 fn bridge_test_rejects_unexpected_arguments() {
     let output = Command::new(env!("CARGO_BIN_EXE_vista-host"))
