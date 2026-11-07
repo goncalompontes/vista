@@ -6,11 +6,11 @@ Inspired by [Sill](https://github.com/Saffsanity/sill); not a fork or a drop-in 
 
 ## Status
 
-**Milestone 0 — live Linux host discovery.** The Rust host CLI discovers running Niri windows by ID, emits an incremental event stream for the window catalog, and probes the desktop ScreenCast portal without requesting capture. The iOS/iPadOS SwiftUI preview is now in `client/`, with no network connection or media yet. Vista does **not** yet capture pixels, stream video, authenticate clients, or launch isolated sessions. An opt-in `capture-consent` diagnostic can now request a single-window ScreenCast portal selection and report the negotiated PipeWire node IDs; it immediately releases the session without accessing pixels. See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).
+**Milestone 0 — live Linux host discovery.** The Rust host CLI discovers running Niri windows by ID, emits an incremental event stream for the window catalog, and probes the desktop ScreenCast portal without requesting capture. The iOS/iPadOS SwiftUI preview is now in `client/`, with no network connection or media yet. Vista does **not** yet have a verified live pixel-capture path, stream video, authenticate clients, or launch isolated sessions. An opt-in `capture-consent` diagnostic requests a single-window ScreenCast selection and reports negotiated PipeWire nodes, then closes the session without accessing pixels. A separate opt-in `capture-frame` diagnostic now attempts to read exactly one selected window frame in memory through the portal-authorized PipeWire remote, returning only timing/size metadata. It has compiled but has not yet been verified against a manually approved desktop chooser. See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).
 
 ## Develop
 
-Requirements: Rust/Cargo, a running Niri compositor and the `niri` executable on PATH.
+Requirements: Rust/Cargo, a running Niri compositor and the `niri` executable on PATH. The optional `capture-frame` diagnostic also needs GStreamer development libraries and plugins (`gstreamer-1.0`, `gstreamer-app-1.0`, `pipewiresrc`, `videoconvert` and `appsink`), PipeWire and a working desktop ScreenCast portal.
 
 ```sh
 cd host
@@ -23,6 +23,8 @@ cargo run -- watch --json
 cargo run -- capabilities --json
 # Opens a desktop consent chooser; does NOT capture frames:
 cargo run -- capture-consent --confirm --json
+# Opens a desktop consent chooser; attempts one in-memory frame (no file or network output):
+cargo run -- capture-frame --confirm --json
 ```
 
 Window IDs come from the active Niri session and can change after a window closes or the compositor restarts. `--json` supports programmatic consumers. When running through a tool or service with a sanitized environment, export `NIRI_SOCKET` from the active Niri session before invoking the host CLI.

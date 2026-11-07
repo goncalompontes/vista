@@ -11,6 +11,7 @@ struct HostCapabilities {
 fn usage() {
     eprintln!("Usage: vista-host <doctor|capabilities|windows|window ID|watch> [--json]");
     eprintln!("       vista-host capture-consent --confirm [--json]");
+    eprintln!("       vista-host capture-frame --confirm [--json]");
 }
 
 fn run() -> Result<(), NiriError> {
@@ -110,6 +111,36 @@ fn run() -> Result<(), NiriError> {
                     );
                 }
                 println!("No pixels captured; arbitrary Niri window capture remains unverified.");
+            }
+        }
+        [command, confirm]
+            if command.as_str() == "capture-frame" && confirm.as_str() == "--confirm" =>
+        {
+            eprintln!(
+                "Vista will request permission to read exactly one selected window frame. Pixels remain in memory and are not saved or transmitted; the session is not persisted."
+            );
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let report = runtime
+                .block_on(vista_host::capture::first_frame_probe())
+                .map_err(|err| {
+                    NiriError::Unavailable(format!(
+                        "ScreenCast frame probe failed or was cancelled: {err}"
+                    ))
+                })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else if let Some(frame) = report.frame {
+                println!(
+                    "Received PipeWire video frame from node {}: {:?}x{:?}, {} bytes, {} ms; no pixels saved or transmitted.",
+                    frame.pipewire_node_id,
+                    frame.width,
+                    frame.height,
+                    frame.bytes,
+                    frame.elapsed_ms
+                );
+                println!("Arbitrary Niri window-ID capture remains unverified.");
             }
         }
         [command] if command.as_str() == "watch" => watch_windows(json)?,
