@@ -24,6 +24,7 @@ pub enum SessionError {
     InvalidTransition,
     StaleToken,
     InvalidFrame,
+    InvalidAccessUnit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,6 +48,17 @@ impl FrameGeometry {
 
 const MAX_RAW_FRAME_BYTES: usize = 256 * 1024 * 1024;
 const MAX_QUEUED_FRAMES: usize = 2;
+const MAX_H264_ACCESS_UNIT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_QUEUED_ACCESS_UNITS: usize = 2;
+
+/// Transport-neutral compressed frame, produced only after authorized encoding.
+/// The encoder must provide byte-stream H.264 with access-unit alignment.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct H264AccessUnit {
+    pub pts_ns: Option<u64>,
+    pub is_keyframe: bool,
+    pub bytes: Vec<u8>,
+}
 
 /// Owns at most two transient frames; on pressure the oldest frame is dropped.
 /// A source may only enqueue a frame with the current authorization token.
@@ -55,7 +67,9 @@ pub struct StreamSession {
     epoch: u64,
     geometry: Option<FrameGeometry>,
     queue: VecDeque<Vec<u8>>,
+    encoded_queue: VecDeque<H264AccessUnit>,
     dropped_frames: u64,
+    dropped_access_units: u64,
     resize_events: u64,
 }
 
@@ -72,7 +86,9 @@ impl StreamSession {
             epoch: 0,
             geometry: None,
             queue: VecDeque::with_capacity(MAX_QUEUED_FRAMES),
+            encoded_queue: VecDeque::with_capacity(MAX_QUEUED_ACCESS_UNITS),
             dropped_frames: 0,
+            dropped_access_units: 0,
             resize_events: 0,
         }
     }
@@ -87,6 +103,14 @@ impl StreamSession {
 
     pub fn dropped_frames(&self) -> u64 {
         self.dropped_frames
+    }
+
+    pub fn queued_access_units(&self) -> usize {
+        self.encoded_queue.len()
+    }
+
+    pub fn dropped_access_units(&self) -> u64 {
+        self.dropped_access_units
     }
 
     pub fn resize_events(&self) -> u64 {
@@ -134,6 +158,7 @@ impl StreamSession {
             self.resize_events += 1;
             // Never mix old-geometry frames into a new resolution.
             self.queue.clear();
+            self.encoded_queue.clear();
         }
         self.geometry = Some(geometry);
         if self.queue.len() == MAX_QUEUED_FRAMES {
@@ -153,10 +178,46 @@ impl StreamSession {
         Ok(self.queue.pop_front())
     }
 
+    /// Only a live grant can place encoded video into the bounded handoff queue.
+    /// Callers validate H.264 caps, byte-stream format and AU alignment before this.
+    /// The oldest access unit is dropped on pressure; consumers must react to
+    /// dropped_access_units and reacquire an IDR before decoding deltas.
+    pub fn enqueue_h264(
+        &mut self,
+        token: SessionToken,
+        unit: H264AccessUnit,
+    ) -> Result<(), SessionError> {
+        self.verify(token)?;
+        if self.state != SessionState::Streaming {
+            return Err(SessionError::InvalidTransition);
+        }
+        if unit.bytes.is_empty() || unit.bytes.len() > MAX_H264_ACCESS_UNIT_BYTES {
+            return Err(SessionError::InvalidAccessUnit);
+        }
+        if self.encoded_queue.len() == MAX_QUEUED_ACCESS_UNITS {
+            self.encoded_queue.pop_front();
+            self.dropped_access_units += 1;
+        }
+        self.encoded_queue.push_back(unit);
+        Ok(())
+    }
+
+    pub fn dequeue_h264(
+        &mut self,
+        token: SessionToken,
+    ) -> Result<Option<H264AccessUnit>, SessionError> {
+        self.verify(token)?;
+        if self.state != SessionState::Streaming {
+            return Err(SessionError::InvalidTransition);
+        }
+        Ok(self.encoded_queue.pop_front())
+    }
+
     /// Revocation immediately discards all buffered pixels and invalidates tokens.
     /// Idempotent for an already revoked or closed session.
     pub fn revoke(&mut self) {
         self.queue.clear();
+        self.encoded_queue.clear();
         self.geometry = None;
         self.epoch = self.epoch.wrapping_add(1);
         if self.state != SessionState::Closed {
@@ -287,6 +348,104 @@ mod tests {
         session.close();
         assert_eq!(session.state(), SessionState::Closed);
         assert_eq!(session.queued_frames(), 0);
+    }
+
+    #[test]
+    fn encoded_queue_is_bounded_and_preserves_metadata() {
+        let (mut session, token) = live_session();
+        for i in 0..4u8 {
+            session
+                .enqueue_h264(
+                    token,
+                    H264AccessUnit {
+                        pts_ns: Some(u64::from(i) * 33_333_333),
+                        is_keyframe: i == 0,
+                        bytes: vec![0, 0, 0, 1, i],
+                    },
+                )
+                .unwrap();
+        }
+        assert_eq!(session.queued_access_units(), 2);
+        assert_eq!(session.dropped_access_units(), 2);
+        let first = session.dequeue_h264(token).unwrap().unwrap();
+        assert_eq!(first.pts_ns, Some(66_666_666));
+        assert_eq!(first.bytes, vec![0, 0, 0, 1, 2]);
+        assert!(!first.is_keyframe);
+        assert_eq!(
+            session.dequeue_h264(token).unwrap().unwrap().pts_ns,
+            Some(99_999_999)
+        );
+        assert!(session.dequeue_h264(token).unwrap().is_none());
+    }
+
+    #[test]
+    fn encoded_queue_rejects_invalid_sizes_and_invalid_state() {
+        let mut session = StreamSession::new();
+        let token = session.authorize().unwrap();
+        let small = H264AccessUnit {
+            pts_ns: None,
+            is_keyframe: true,
+            bytes: vec![1],
+        };
+        assert_eq!(
+            session.enqueue_h264(token, small.clone()),
+            Err(SessionError::InvalidTransition)
+        );
+        session.start(token).unwrap();
+        assert_eq!(
+            session.enqueue_h264(
+                token,
+                H264AccessUnit {
+                    bytes: vec![],
+                    ..small.clone()
+                }
+            ),
+            Err(SessionError::InvalidAccessUnit)
+        );
+        assert_eq!(
+            session.enqueue_h264(
+                token,
+                H264AccessUnit {
+                    bytes: vec![1; MAX_H264_ACCESS_UNIT_BYTES + 1],
+                    ..small.clone()
+                }
+            ),
+            Err(SessionError::InvalidAccessUnit)
+        );
+        assert_eq!(session.queued_access_units(), 0);
+        session.enqueue_h264(token, small).unwrap();
+        session.revoke();
+        assert_eq!(session.queued_access_units(), 0);
+        assert_eq!(session.dequeue_h264(token), Err(SessionError::StaleToken));
+        assert_eq!(
+            session.enqueue_h264(
+                token,
+                H264AccessUnit {
+                    pts_ns: None,
+                    is_keyframe: true,
+                    bytes: vec![1]
+                }
+            ),
+            Err(SessionError::StaleToken)
+        );
+    }
+
+    #[test]
+    fn resize_clears_encoded_access_units() {
+        let (mut session, token) = live_session();
+        session.enqueue_rgba(token, SMALL, vec![0; 16]).unwrap();
+        session
+            .enqueue_h264(
+                token,
+                H264AccessUnit {
+                    pts_ns: None,
+                    is_keyframe: true,
+                    bytes: vec![1],
+                },
+            )
+            .unwrap();
+        session.enqueue_rgba(token, RESIZED, vec![0; 32]).unwrap();
+        assert_eq!(session.queued_access_units(), 0);
     }
 
     #[test]

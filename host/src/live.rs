@@ -2,7 +2,7 @@
 //! Never persists pixels or streams content to a network endpoint.
 use crate::{
     media::{H264Encoder, probe_encoders},
-    session::{FrameGeometry, StreamSession},
+    session::{FrameGeometry, H264AccessUnit, SessionToken, StreamSession},
 };
 use ashpd::desktop::{
     PersistMode,
@@ -40,6 +40,7 @@ pub struct LiveBridgeReport {
     pub encoded_buffers: usize,
     pub encoded_bytes: usize,
     pub dropped_frames: u64,
+    pub dropped_access_units: u64,
     pub elapsed_ms: u128,
     pub verified: bool,
     pub arbitrary_window_capture_verified: bool,
@@ -135,25 +136,55 @@ fn check_capture_errors(source: &gst::Pipeline, target: &gst::Pipeline) -> Resul
     check_pipeline_error(target, "H.264 encoder")
 }
 
+fn collect_encoded(
+    sample: &gst::Sample,
+    session: &mut StreamSession,
+    token: SessionToken,
+    buffers: &mut usize,
+    bytes: &mut usize,
+) -> Result<(), String> {
+    let caps = sample.caps().ok_or("encoded sample missing caps")?;
+    let structure = caps
+        .structure(0)
+        .ok_or("encoded sample missing structure")?;
+    if structure.name() != "video/x-h264"
+        || structure.get::<&str>("stream-format").ok() != Some("byte-stream")
+        || structure.get::<&str>("alignment").ok() != Some("au")
+    {
+        return Err("encoded sample is not byte-stream, AU-aligned H.264".into());
+    }
+    let buffer = sample.buffer().ok_or("encoded sample missing buffer")?;
+    let mapped = buffer
+        .map_readable()
+        .map_err(|_| "cannot map H.264 sample")?;
+    let len = mapped.size();
+    if len == 0 || len > 16 * 1024 * 1024 {
+        return Err("invalid H.264 sample length".into());
+    }
+    session
+        .enqueue_h264(
+            token,
+            H264AccessUnit {
+                pts_ns: buffer.pts().map(|pts| pts.nseconds()),
+                is_keyframe: !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT),
+                bytes: mapped.as_slice().to_vec(),
+            },
+        )
+        .map_err(|e| format!("encoded session rejected access unit: {e:?}"))?;
+    *buffers += 1;
+    *bytes += len;
+    Ok(())
+}
+
 fn drain_encoded(
     sink: &gst_app::AppSink,
+    session: &mut StreamSession,
+    token: SessionToken,
     buffers: &mut usize,
     bytes: &mut usize,
 ) -> Result<(), String> {
     while let Some(sample) = sink.try_pull_sample(gst::ClockTime::ZERO) {
-        let caps = sample.caps().ok_or("encoded sample missing caps")?;
-        if caps.structure(0).map(|s| s.name().as_str()) != Some("video/x-h264") {
-            return Err("encoded sample is not H.264".into());
-        }
-        let len = sample
-            .buffer()
-            .ok_or("encoded sample missing buffer")?
-            .size();
-        if len == 0 || len > 16 * 1024 * 1024 {
-            return Err("invalid H.264 sample length".into());
-        }
-        *buffers += 1;
-        *bytes += len;
+        collect_encoded(&sample, session, token, buffers, bytes)?;
     }
     Ok(())
 }
@@ -167,7 +198,7 @@ fn bridge_pipeline(
     cancelled: &AtomicBool,
 ) -> Result<LiveBridgeReport, String> {
     let target = pipeline(&format!(
-        "appsrc name=raw_source is-live=true format=time caps=video/x-raw,format=RGBA,width={WIDTH},height={HEIGHT},framerate=30/1 ! queue max-size-buffers=2 leaky=downstream ! videoconvert ! {} {} ! h264parse ! video/x-h264,alignment=au ! appsink name=encoded_sink sync=false max-buffers=2 drop=true",
+        "appsrc name=raw_source is-live=true format=time caps=video/x-raw,format=RGBA,width={WIDTH},height={HEIGHT},framerate=30/1 ! queue max-size-buffers=2 leaky=downstream ! videoconvert ! {} {} ! h264parse ! video/x-h264,stream-format=byte-stream,alignment=au ! appsink name=encoded_sink sync=false max-buffers=2 drop=true",
         encoder.element_name(),
         encode_settings(encoder)
     ))?;
@@ -234,7 +265,13 @@ fn bridge_pipeline(
                         .push_buffer(buffer)
                         .map_err(|e| format!("encoder rejected frame: {e}"))?;
                 }
-                drain_encoded(&encoded_sink, &mut encoded_buffers, &mut encoded_bytes)?;
+                drain_encoded(
+                    &encoded_sink,
+                    &mut session,
+                    token,
+                    &mut encoded_buffers,
+                    &mut encoded_bytes,
+                )?;
             } else if raw_sink.is_eos() {
                 break;
             }
@@ -258,19 +295,22 @@ fn bridge_pipeline(
             let wait = deadline.saturating_duration_since(Instant::now()).min(POLL);
             let ns = u64::try_from(wait.as_nanos()).unwrap_or(u64::MAX);
             if let Some(sample) = encoded_sink.try_pull_sample(gst::ClockTime::from_nseconds(ns)) {
-                let caps = sample.caps().ok_or("encoded sample missing caps")?;
-                if caps.structure(0).map(|s| s.name().as_str()) != Some("video/x-h264") {
-                    return Err("encoded sample is not H.264".into());
-                }
-                let len = sample.buffer().ok_or("encoded buffer missing")?.size();
-                if len == 0 || len > 16 * 1024 * 1024 {
-                    return Err("invalid encoded H.264 size".into());
-                }
-                encoded_buffers += 1;
-                encoded_bytes += len;
+                collect_encoded(
+                    &sample,
+                    &mut session,
+                    token,
+                    &mut encoded_buffers,
+                    &mut encoded_bytes,
+                )?;
             }
         }
-        drain_encoded(&encoded_sink, &mut encoded_buffers, &mut encoded_bytes)?;
+        drain_encoded(
+            &encoded_sink,
+            &mut session,
+            token,
+            &mut encoded_buffers,
+            &mut encoded_bytes,
+        )?;
         check_capture_errors(source, &target)?;
         if input_frames == 0 || encoded_buffers == 0 {
             return Err("no frames encoded from selected source".into());
@@ -278,6 +318,13 @@ fn bridge_pipeline(
         if !encoded_sink.is_eos() {
             return Err("encoder did not finish before capture deadline".into());
         }
+        // This diagnostic does not have a transport consumer. Release all
+        // transient encoded buffers before returning the aggregate report.
+        while session
+            .dequeue_h264(token)
+            .map_err(|e| format!("{e:?}"))?
+            .is_some()
+        {}
         let report = LiveBridgeReport {
             portal_session_started: true,
             pipewire_node_id: node,
@@ -286,6 +333,7 @@ fn bridge_pipeline(
             encoded_buffers,
             encoded_bytes,
             dropped_frames: session.dropped_frames(),
+            dropped_access_units: session.dropped_access_units(),
             elapsed_ms: start.elapsed().as_millis(),
             verified: true,
             arbitrary_window_capture_verified: false,
