@@ -841,8 +841,12 @@ fn media_stream_command(args: &[&str], json: bool) -> Result<(), NiriError> {
             println!("{}", serde_json::to_string(&stats)?);
         } else {
             println!(
-                "Sent {} encrypted media records / {} bytes in {} ms.",
-                stats.frames_sent, stats.bytes_sent, stats.elapsed_ms
+                "Sent {} encrypted media records / {} bytes in {} ms; keyframe requests={}, encoder restarts={}.",
+                stats.frames_sent,
+                stats.bytes_sent,
+                stats.elapsed_ms,
+                stats.keyframe_requests,
+                stats.encoder_restarts
             );
         }
         return Ok(());
@@ -865,11 +869,12 @@ fn media_stream_command(args: &[&str], json: bool) -> Result<(), NiriError> {
         println!("{}", serde_json::to_string(&stats)?);
     } else {
         println!(
-            "Received and decoded {} encrypted media records into {} frames ({} bytes) in {} ms; latency samples={}.",
+            "Received and decoded {} encrypted media records into {} frames ({} bytes) in {} ms; keyframe requests sent={}, latency samples={}.",
             stats.frames_received,
             stats.decoded_frames,
             stats.decoded_bytes,
             stats.elapsed_ms,
+            stats.keyframe_requests_sent,
             stats.latency.samples
         );
     }
