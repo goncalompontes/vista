@@ -9,6 +9,7 @@ use crate::{
     decoder_sync::{H264SyncEvent, H264SyncGate, SyncError},
     media::{H264Encoder, decoder_candidates, probe_encoders},
     session::{FrameGeometry, H264AccessUnit, H264Discontinuity, SessionToken, StreamSession},
+    transport::{Direction, RecordCipher},
 };
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -45,6 +46,8 @@ pub struct SyncRecoveryReport {
     pub discontinuities: usize,
     pub discarded_access_units: u64,
     pub decoded_with_pts: usize,
+    pub aead_records: usize,
+    pub aead_bytes: usize,
     pub recovered_after_injected_loss: bool,
     pub latency: LatencySummary,
     pub elapsed_ms: u128,
@@ -63,6 +66,12 @@ struct LoopStats {
     recovered: bool,
     sent_at: HashMap<u64, Instant>,
     latencies_ms: Vec<f64>,
+    /// Test-only AEAD pair proving each emitted access unit survives the
+    /// encrypted media-record boundary before decoding.
+    aead_seal: Option<RecordCipher>,
+    aead_open: Option<RecordCipher>,
+    aead_records: usize,
+    aead_bytes: usize,
 }
 
 fn deadline_remaining(deadline: Instant) -> gst::ClockTime {
@@ -214,7 +223,22 @@ fn drain_encoded(
                     stats.recovered = true;
                     stats.awaiting_recovery = false;
                 }
-                let mut buffer = gst::Buffer::from_mut_slice(unit.bytes);
+                let plaintext = if let (Some(seal), Some(open)) =
+                    (stats.aead_seal.as_mut(), stats.aead_open.as_mut())
+                {
+                    let sealed = seal
+                        .seal(&unit.bytes)
+                        .map_err(|e| format!("AEAD media seal failed: {e}"))?;
+                    let opened = open
+                        .open(&sealed)
+                        .map_err(|e| format!("AEAD media open failed: {e}"))?;
+                    stats.aead_records += 1;
+                    stats.aead_bytes += opened.len();
+                    opened
+                } else {
+                    unit.bytes
+                };
+                let mut buffer = gst::Buffer::from_mut_slice(plaintext);
                 if let Some(writable) = buffer.get_mut() {
                     if let Some(pts_ns) = unit.pts_ns {
                         writable.set_pts(gst::ClockTime::from_nseconds(pts_ns));
@@ -350,7 +374,21 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
             height: HEIGHT,
         };
         let expected = geometry.rgba_size().ok_or("invalid geometry")?;
-        let mut stats = LoopStats::default();
+        // Fixed test key/session: this proves the media record boundary, not a
+        // real pairing or network transport.
+        let media_key = [0x5au8; 32];
+        let media_session = "00112233445566778899aabbccddeeff";
+        let mut stats = LoopStats {
+            aead_seal: Some(
+                RecordCipher::new(&media_key, media_session, Direction::ClientToHost)
+                    .map_err(|e| format!("cannot create AEAD media cipher: {e}"))?,
+            ),
+            aead_open: Some(
+                RecordCipher::new(&media_key, media_session, Direction::ClientToHost)
+                    .map_err(|e| format!("cannot create AEAD media cipher: {e}"))?,
+            ),
+            ..LoopStats::default()
+        };
 
         for index in 0..FRAME_COUNT {
             let sample = raw_sink
@@ -427,7 +465,9 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
         let verified = stats.decoded_frames > 0
             && stats.discontinuities >= 2
             && stats.recovered
-            && latency.samples > 0;
+            && latency.samples > 0
+            && stats.aead_records > 0
+            && stats.aead_bytes > 0;
         let report = SyncRecoveryReport {
             encoder,
             decoder: decoder.to_string(),
@@ -437,6 +477,8 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
             discontinuities: stats.discontinuities,
             discarded_access_units,
             decoded_with_pts: stats.decoded_with_pts,
+            aead_records: stats.aead_records,
+            aead_bytes: stats.aead_bytes,
             recovered_after_injected_loss: stats.recovered,
             latency,
             elapsed_ms: started.elapsed().as_millis(),
@@ -548,5 +590,7 @@ mod tests {
         assert!(report.recovered_after_injected_loss);
         assert!(report.decoded_frames > 0);
         assert!(report.latency.samples > 0);
+        assert!(report.aead_records > 0);
+        assert!(report.aead_bytes > 0);
     }
 }
