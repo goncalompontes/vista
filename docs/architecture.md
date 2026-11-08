@@ -63,6 +63,54 @@ A separate `vista-host sync-test --json` diagnostic closes the local loop withou
 
 Explicit pairing, mutual authenticated session keys, least-privilege capture and control, visible session revocation, no unauthenticated host listening, no arbitrary command execution from client messages. Isolated process != security sandbox; define filesystem, network, credentials, seat and clipboard exposure before promising app isolation.
 
+### Control protocol and pairing (implemented, transport-neutral)
+
+`host/src/protocol.rs` now defines a versioned JSON control plane for the host
+and client. Control messages are length-prefixed (64 KiB maximum), carry strict
+per-direction sequence numbers, negotiate a protocol version, and use an
+explicit state machine (`awaiting hello` → `awaiting proof` → `paired` →
+`active`). Pairing uses a 256-bit secret transferred out of band (for example a
+QR code), HMAC-SHA256 confirmation in both directions and HKDF-SHA256 session
+keys; offers expire after 120 seconds. Video, audio, input and clipboard are
+denied by default, and the host re-checks every requested permission before a
+session becomes active.
+
+This is a control-plane boundary only. The current implementation has **no
+listener, discovery, TLS/QUIC/WebRTC transport, frame encryption or iOS client**;
+the derived keys are not yet used by an AEAD layer. It also has no forward
+secrecy, host identity signature or external audit. The full contract, threat
+model and WebRTC-versus-custom transport analysis are in
+[protocol.md](protocol.md). `vista-host protocol-test --json` verifies the
+in-memory handshake and the wrong-secret, replay, expiry, permission-escalation
+and version-mismatch paths.
+
+### Control protocol and pairing (implemented, transport-neutral)
+
+`host/src/protocol.rs` defines a versioned JSON control plane for the host and
+client. Control messages are length-prefixed (64 KiB maximum), carry strict
+per-direction sequence numbers, negotiate a protocol version, and use an
+explicit state machine (`awaiting hello` → `awaiting proof` → `paired` →
+`active`). Pairing uses a 256-bit secret transferred out of band (for example a
+QR code), HMAC-SHA256 confirmation in both directions and HKDF-SHA256 session
+keys; offers expire after 120 seconds. Video, audio, input and clipboard are
+denied by default, and the host re-checks every requested permission before a
+session becomes active.
+
+After pairing, a bounded ChaCha20-Poly1305 record layer encrypts control
+frames with implicit per-direction nonce counters and AAD bound to the session
+and direction. `protocol-loopback` exercises the full pairing and encrypted
+`SessionOpen`/`KeyframeRequest`/`Ping` over a real `127.0.0.1` TCP socket; a
+one-shot `protocol-serve` listener and `protocol-client` reference client run
+the same exchange across two processes (non-loopback binding requires an
+explicit `--allow-remote`). This
+is a loopback diagnostic and record boundary, **not** a production transport:
+there is no public listener, discovery, TLS/QUIC/WebRTC, metadata protection,
+congestion control or iOS client, and the protocol has no forward secrecy, host
+identity signature or external audit. The full contract, threat model and
+WebRTC-versus-custom transport analysis are in [protocol.md](protocol.md).
+`vista-host protocol-test --json` verifies the in-memory handshake and the
+wrong-secret, replay, expiry, permission-escalation and version-mismatch paths.
+
 ### State of implementation
 
-Niri window discovery, incremental window catalog events and a read-only desktop portal ScreenCast capability probe are implemented. On the tested system, ScreenCast version 5 advertises source mask 7 (monitor/window/virtual-monitor) and cursor mask 7; this does **not** verify Niri-specific per-window capture or grant permission to record. A SwiftUI iPhone/iPad app **preview** and cross-platform `VistaCore` model package now exist under `client/`. They use explicit sample data and do not connect to the host. An explicitly invoked `vista-host capture-consent --confirm` command requests a single-window portal ScreenCast selection without persistent grants, prints negotiated PipeWire node IDs, and closes the session without connecting to PipeWire. The separate `vista-host capture-frame --confirm` command requests the same window-only permission, opens the portal's restricted PipeWire remote and attempts to read one RGBA GStreamer sample (five-second sample wait), emitting only its dimensions, byte length and elapsed time. It shuts down the pipeline and closes the portal session on success or error. A separate opt-in `capture-burst --confirm` diagnostic attempts up to eight transient in-memory frames from a single portal-selected window, reporting timing and detected size changes without saving content. Its overall five-second frame sampling deadline does not bound portal authorization or pipeline startup/shutdown. Permission-free GStreamer tests verify single-frame, multi-frame and monitor capture, timeout/EOS behavior, invalid samples, and pipeline cleanup; all pass. These do not verify live portal/PipeWire behavior. An additional explicitly authorized `capture-monitor --confirm` diagnostic reads transient frames for at most three seconds or 120 frames with a two-buffer AppSink queue, retaining only aggregate statistics and reporting frame-limit, deadline or EOS termination. Its synthetic tests cover these termination modes, invalid caps and pipeline cleanup; the deadline bounds the sampling loop, not desktop consent or pipeline shutdown. Live chooser approval and frame retrieval are not yet manually verified. Niri window-ID-targeted capture is not verified, even if the portal chooser returns a frame. Actual frame capture, encoding, transport, input, pairing, isolated sessions and a functioning iOS client remain architectural targets.
+Niri window discovery, incremental window catalog events and a read-only desktop portal ScreenCast capability probe are implemented. On the tested system, ScreenCast version 5 advertises source mask 7 (monitor/window/virtual-monitor) and cursor mask 7; this does **not** verify Niri-specific per-window capture or grant permission to record. A SwiftUI iPhone/iPad app **preview** and cross-platform `VistaCore` model package now exist under `client/`. They use explicit sample data and do not connect to the host. An explicitly invoked `vista-host capture-consent --confirm` command requests a single-window portal ScreenCast selection without persistent grants, prints negotiated PipeWire node IDs, and closes the session without connecting to PipeWire. The separate `vista-host capture-frame --confirm` command requests the same window-only permission, opens the portal's restricted PipeWire remote and attempts to read one RGBA GStreamer sample (five-second sample wait), emitting only its dimensions, byte length and elapsed time. It shuts down the pipeline and closes the portal session on success or error. A separate opt-in `capture-burst --confirm` diagnostic attempts up to eight transient in-memory frames from a single portal-selected window, reporting timing and detected size changes without saving content. Its overall five-second frame sampling deadline does not bound portal authorization or pipeline startup/shutdown. Permission-free GStreamer tests verify single-frame, multi-frame and monitor capture, timeout/EOS behavior, invalid samples, and pipeline cleanup; all pass. These do not verify live portal/PipeWire behavior. An additional explicitly authorized `capture-monitor --confirm` diagnostic reads transient frames for at most three seconds or 120 frames with a two-buffer AppSink queue, retaining only aggregate statistics and reporting frame-limit, deadline or EOS termination. Its synthetic tests cover these termination modes, invalid caps and pipeline cleanup; the deadline bounds the sampling loop, not desktop consent or pipeline shutdown. Live chooser approval and frame retrieval are not yet manually verified. Niri window-ID-targeted capture is not verified, even if the portal chooser returns a frame. The control-plane pairing/session state machine and localhost AEAD control transport are implemented but not deployed. Media transport, input routing, isolated sessions and a functioning iOS client remain architectural targets.
