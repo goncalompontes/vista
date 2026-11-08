@@ -47,6 +47,7 @@ pub struct SyncRecoveryReport {
     pub decoded_with_pts: usize,
     pub keyframe_requests: usize,
     pub encoder_restarts: usize,
+    pub restart_enabled: bool,
     pub recovered_after_injected_loss: bool,
     pub latency: LatencySummary,
     pub elapsed_ms: u128,
@@ -300,7 +301,11 @@ fn summarize(mut samples: Vec<f64>) -> LatencySummary {
     }
 }
 
-fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryReport, String> {
+fn run_pipeline(
+    encoder: H264Encoder,
+    decoder: &str,
+    enable_restart: bool,
+) -> Result<SyncRecoveryReport, String> {
     let raw = build_pipeline(&raw_description())?;
     let mut encoded = build_pipeline(&encoder_description(encoder))?;
     let decoded = build_pipeline(&decoder_description(decoder))?;
@@ -409,7 +414,7 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
                 stats.keyframe_requests += 1;
                 stats.requested = true;
             }
-            if request_rx.try_recv().is_ok() {
+            if enable_restart && request_rx.try_recv().is_ok() {
                 // Producer-side keyframe request: restart the encoder so the
                 // next access unit is a fresh SPS/PPS IDR. Upstream
                 // force-key-unit events were not honored through h264parse on
@@ -483,6 +488,7 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
             decoded_with_pts: stats.decoded_with_pts,
             keyframe_requests: stats.keyframe_requests,
             encoder_restarts: stats.encoder_restarts,
+            restart_enabled: enable_restart,
             recovered_after_injected_loss: stats.recovered,
             latency,
             elapsed_ms: started.elapsed().as_millis(),
@@ -507,6 +513,15 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
 /// Exercises the full in-memory encode → handoff → recovery-gate → decode path,
 /// including one deliberate discontinuity, and measures traversal latency.
 pub fn synthetic_sync_recovery() -> Result<SyncRecoveryReport, String> {
+    synthetic_sync_recovery_with_restart(true)
+}
+
+/// Same diagnostic with the producer-side restart explicitly enabled or
+/// disabled. The no-restart variant proves that the 250-frame GOP cannot
+/// recover the injected loss on its own.
+pub fn synthetic_sync_recovery_with_restart(
+    enable_restart: bool,
+) -> Result<SyncRecoveryReport, String> {
     let caps = probe_encoders()?;
     if !caps.h264_parser {
         return Err("GStreamer h264parse is unavailable".into());
@@ -530,7 +545,7 @@ pub fn synthetic_sync_recovery() -> Result<SyncRecoveryReport, String> {
             continue;
         }
         for decoder in &decoders {
-            match run_pipeline(encoder, decoder) {
+            match run_pipeline(encoder, decoder, enable_restart) {
                 Ok(report) if report.verified => return Ok(report),
                 Ok(report) => failures.push(format!(
                     "{} -> {decoder}: not verified ({} decoded, {} discontinuities, recovered={}, {} latency samples)",
@@ -596,5 +611,30 @@ mod tests {
         assert!(report.latency.samples > 0);
         assert!(report.keyframe_requests >= 1);
         assert_eq!(report.encoder_restarts, report.keyframe_requests);
+    }
+
+    #[test]
+    #[ignore = "requires functioning H.264 encoder and decoder plugins"]
+    fn long_gop_recovery_requires_an_explicit_restart() {
+        let capabilities = probe_encoders().unwrap();
+        let encoder = capabilities.selected.expect("no H.264 encoder");
+        let decoder = decoder_candidates()
+            .iter()
+            .copied()
+            .find(|name| gst::ElementFactory::find(name).is_some())
+            .expect("no H.264 decoder");
+
+        let without_restart = run_pipeline(encoder, decoder, false).expect("no-restart pipeline");
+        assert!(!without_restart.restart_enabled);
+        assert_eq!(without_restart.encoder_restarts, 0);
+        assert!(!without_restart.recovered_after_injected_loss);
+        assert!(!without_restart.verified);
+        assert!(without_restart.decoded_frames < 12);
+
+        let with_restart = run_pipeline(encoder, decoder, true).expect("restart pipeline");
+        assert!(with_restart.restart_enabled);
+        assert!(with_restart.encoder_restarts >= 1);
+        assert!(with_restart.recovered_after_injected_loss);
+        assert!(with_restart.verified);
     }
 }
