@@ -26,6 +26,8 @@ use zeroize::Zeroize;
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 1, minor: 0 };
 pub const MAX_CONTROL_FRAME_BYTES: usize = 64 * 1024;
 pub const PAIRING_OFFER_TTL_SECS: u64 = 120;
+/// Minimum time between accepted consumer keyframe requests.
+pub const MIN_KEYFRAME_INTERVAL_SECS: u64 = 1;
 const MAX_IDENTIFIER_BYTES: usize = 128;
 const NONCE_BYTES: usize = 32;
 const PAIRING_ID_BYTES: usize = 16;
@@ -534,6 +536,8 @@ pub struct HostSession {
     session_id: Option<String>,
     permissions: PermissionSet,
     keyframe_requests: u64,
+    last_keyframe_at: Option<u64>,
+    rate_limited_keyframe_requests: u64,
 }
 
 impl HostSession {
@@ -567,6 +571,8 @@ impl HostSession {
             session_id: None,
             permissions: PermissionSet::default(),
             keyframe_requests: 0,
+            last_keyframe_at: None,
+            rate_limited_keyframe_requests: 0,
         })
     }
 
@@ -596,6 +602,10 @@ impl HostSession {
 
     pub fn keyframe_requests(&self) -> u64 {
         self.keyframe_requests
+    }
+
+    pub fn rate_limited_keyframe_requests(&self) -> u64 {
+        self.rate_limited_keyframe_requests
     }
 
     fn reply(&mut self, body: ControlMessage) -> Envelope {
@@ -734,6 +744,14 @@ impl HostSession {
                 if self.session_id.as_deref() != Some(session_id.as_str()) {
                     return Err(ProtocolError::SessionMismatch);
                 }
+                if let Some(last) = self.last_keyframe_at
+                    && now_secs.saturating_sub(last) < MIN_KEYFRAME_INTERVAL_SECS
+                {
+                    self.rate_limited_keyframe_requests =
+                        self.rate_limited_keyframe_requests.saturating_add(1);
+                    return Ok(None);
+                }
+                self.last_keyframe_at = Some(now_secs);
                 self.keyframe_requests = self.keyframe_requests.saturating_add(1);
                 Ok(None)
             }
@@ -1592,6 +1610,26 @@ mod tests {
         assert!(validate_identifier("line\nbreak").is_err());
         assert!(PairingSecret::from_hex(&"00".repeat(SECRET_BYTES)).is_ok());
         assert!(PairingSecret::from_hex("00").is_err());
+    }
+
+    #[test]
+    fn keyframe_requests_are_rate_limited() {
+        let (mut host, mut client, _) = paired();
+        let open = client.open_session(PermissionSet::video_only()).unwrap();
+        let opened = host.handle(&open, 1_000_000).unwrap().unwrap();
+        client.accept_session_opened(&opened).unwrap();
+
+        let first = client.keyframe_request().unwrap();
+        host.handle(&first, 1_000_001).unwrap();
+        let second = client.keyframe_request().unwrap();
+        host.handle(&second, 1_000_001).unwrap();
+        assert_eq!(host.keyframe_requests(), 1);
+        assert_eq!(host.rate_limited_keyframe_requests(), 1);
+
+        let third = client.keyframe_request().unwrap();
+        host.handle(&third, 1_000_002).unwrap();
+        assert_eq!(host.keyframe_requests(), 2);
+        assert_eq!(host.rate_limited_keyframe_requests(), 1);
     }
 
     #[test]
