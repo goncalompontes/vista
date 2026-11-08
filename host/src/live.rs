@@ -2,7 +2,7 @@
 //! Never persists pixels or streams content to a network endpoint.
 use crate::{
     media::{H264Encoder, probe_encoders},
-    session::{FrameGeometry, H264AccessUnit, SessionToken, StreamSession},
+    session::{FrameGeometry, H264AccessUnit, H264Discontinuity, SessionToken, StreamSession},
 };
 use ashpd::desktop::{
     PersistMode,
@@ -161,6 +161,11 @@ fn collect_encoded(
     if len == 0 || len > 16 * 1024 * 1024 {
         return Err("invalid H.264 sample length".into());
     }
+    if buffer.flags().contains(gst::BufferFlags::DISCONT) {
+        session
+            .mark_h264_discontinuity(token, H264Discontinuity::Pipeline)
+            .map_err(|e| format!("encoded session rejected discontinuity: {e:?}"))?;
+    }
     session
         .enqueue_h264(
             token,
@@ -198,7 +203,7 @@ fn bridge_pipeline(
     cancelled: &AtomicBool,
 ) -> Result<LiveBridgeReport, String> {
     let target = pipeline(&format!(
-        "appsrc name=raw_source is-live=true format=time caps=video/x-raw,format=RGBA,width={WIDTH},height={HEIGHT},framerate=30/1 ! queue max-size-buffers=2 leaky=downstream ! videoconvert ! {} {} ! h264parse ! video/x-h264,stream-format=byte-stream,alignment=au ! appsink name=encoded_sink sync=false max-buffers=2 drop=true",
+        "appsrc name=raw_source is-live=true format=time caps=video/x-raw,format=RGBA,width={WIDTH},height={HEIGHT},framerate=30/1 ! queue max-size-buffers=2 leaky=downstream ! videoconvert ! {} {} ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au ! appsink name=encoded_sink sync=false max-buffers=2 drop=false",
         encoder.element_name(),
         encode_settings(encoder)
     ))?;
@@ -454,6 +459,35 @@ pub async fn capture_h264_probe() -> Result<LiveBridgeReport, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoded_discont_is_propagated_to_stream_continuity() {
+        gst::init().unwrap();
+        let mut session = StreamSession::new();
+        let token = session.authorize().unwrap();
+        session.start(token).unwrap();
+        let (before, _) = session.h264_continuity(token).unwrap();
+        let caps = gst::Caps::builder("video/x-h264")
+            .field("stream-format", "byte-stream")
+            .field("alignment", "au")
+            .build();
+        let mut buffer = gst::Buffer::from_mut_slice(vec![0, 0, 0, 1, 0x67, 0x42]);
+        buffer
+            .get_mut()
+            .unwrap()
+            .set_flags(gst::BufferFlags::DISCONT);
+        let sample = gst::Sample::builder().buffer(&buffer).caps(&caps).build();
+        let (mut buffers, mut bytes) = (0, 0);
+        collect_encoded(&sample, &mut session, token, &mut buffers, &mut bytes).unwrap();
+        assert_eq!(buffers, 1);
+        assert_eq!(bytes, 6);
+        assert_eq!(session.queued_access_units(), 1);
+        assert_eq!(
+            session.h264_continuity(token).unwrap(),
+            (before + 1, H264Discontinuity::Pipeline)
+        );
+    }
+
     #[test]
     fn row_packing_preserves_pixels_and_discards_padding() {
         let input = [

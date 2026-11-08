@@ -27,6 +27,18 @@ pub enum SessionError {
     InvalidAccessUnit,
 }
 
+/// Why a decoder must discard reference state and await a fresh IDR.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum H264Discontinuity {
+    Startup,
+    QueueOverflow,
+    GeometryChange,
+    Pipeline,
+    ReceiverReset,
+    InvalidBitstream,
+    CodecConfiguration,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrameGeometry {
     pub width: u32,
@@ -70,6 +82,9 @@ pub struct StreamSession {
     encoded_queue: VecDeque<H264AccessUnit>,
     dropped_frames: u64,
     dropped_access_units: u64,
+    /// Generation changes whenever delivery continuity becomes uncertain.
+    encoded_continuity: u64,
+    encoded_discontinuity_reason: H264Discontinuity,
     resize_events: u64,
 }
 
@@ -89,6 +104,8 @@ impl StreamSession {
             encoded_queue: VecDeque::with_capacity(MAX_QUEUED_ACCESS_UNITS),
             dropped_frames: 0,
             dropped_access_units: 0,
+            encoded_continuity: 0,
+            encoded_discontinuity_reason: H264Discontinuity::Startup,
             resize_events: 0,
         }
     }
@@ -111,6 +128,39 @@ impl StreamSession {
 
     pub fn dropped_access_units(&self) -> u64 {
         self.dropped_access_units
+    }
+
+    /// Loss notification is authorization-scoped. An observer cannot use an
+    /// expired grant to inspect the stream's continuity or queue contents.
+    pub fn h264_continuity(
+        &self,
+        token: SessionToken,
+    ) -> Result<(u64, H264Discontinuity), SessionError> {
+        self.verify(token)?;
+        if self.state != SessionState::Streaming {
+            return Err(SessionError::InvalidTransition);
+        }
+        Ok((self.encoded_continuity, self.encoded_discontinuity_reason))
+    }
+
+    /// Notify a downstream consumer of loss outside the bounded queue, e.g.
+    /// GStreamer DISCONT. Caller must ensure a valid and active portal grant.
+    pub fn mark_h264_discontinuity(
+        &mut self,
+        token: SessionToken,
+        reason: H264Discontinuity,
+    ) -> Result<(), SessionError> {
+        self.verify(token)?;
+        if self.state != SessionState::Streaming {
+            return Err(SessionError::InvalidTransition);
+        }
+        self.bump_h264_continuity(reason);
+        Ok(())
+    }
+
+    fn bump_h264_continuity(&mut self, reason: H264Discontinuity) {
+        self.encoded_continuity = self.encoded_continuity.wrapping_add(1);
+        self.encoded_discontinuity_reason = reason;
     }
 
     pub fn resize_events(&self) -> u64 {
@@ -159,6 +209,7 @@ impl StreamSession {
             // Never mix old-geometry frames into a new resolution.
             self.queue.clear();
             self.encoded_queue.clear();
+            self.bump_h264_continuity(H264Discontinuity::GeometryChange);
         }
         self.geometry = Some(geometry);
         if self.queue.len() == MAX_QUEUED_FRAMES {
@@ -180,8 +231,8 @@ impl StreamSession {
 
     /// Only a live grant can place encoded video into the bounded handoff queue.
     /// Callers validate H.264 caps, byte-stream format and AU alignment before this.
-    /// The oldest access unit is dropped on pressure; consumers must react to
-    /// dropped_access_units and reacquire an IDR before decoding deltas.
+    /// The oldest access unit is dropped on pressure. This increments the
+    /// continuity generation so each decoder can signal a reset explicitly.
     pub fn enqueue_h264(
         &mut self,
         token: SessionToken,
@@ -197,6 +248,7 @@ impl StreamSession {
         if self.encoded_queue.len() == MAX_QUEUED_ACCESS_UNITS {
             self.encoded_queue.pop_front();
             self.dropped_access_units += 1;
+            self.bump_h264_continuity(H264Discontinuity::QueueOverflow);
         }
         self.encoded_queue.push_back(unit);
         Ok(())

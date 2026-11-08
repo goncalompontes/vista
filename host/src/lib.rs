@@ -6,6 +6,7 @@
 pub mod bridge;
 pub mod capture;
 pub mod catalog;
+pub mod decoder_sync;
 pub mod live;
 pub mod media;
 pub mod portal;
