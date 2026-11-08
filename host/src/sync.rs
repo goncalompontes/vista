@@ -1,14 +1,16 @@
 //! Synthetic end-to-end test of encode → permission-scoped handoff → sync gate → decode.
 //!
-//! This uses `videotestsrc` and in-memory GStreamer pipelines only. It never
-//! touches PipeWire, the desktop portal, user pixels or a network endpoint.
-//! Reported latency is the in-process encode/handoff/decode traversal time, not
-//! capture latency and not network round-trip time.
+//! This uses `videotestsrc`, in-memory GStreamer pipelines and a **localhost
+//! TCP loopback** for the encrypted media-record hop. It never touches
+//! PipeWire, the desktop portal, user pixels or an external network endpoint.
+//! Reported latency is the encode/handoff/record/decode traversal time, not
+//! capture latency and not a wide-area network round-trip.
 
 use crate::{
     decoder_sync::{H264SyncEvent, H264SyncGate, SyncError},
     media::{H264Encoder, decoder_candidates, probe_encoders},
     session::{FrameGeometry, H264AccessUnit, H264Discontinuity, SessionToken, StreamSession},
+    transport::{Direction, MAX_RECORD_BYTES, RecordCipher},
 };
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -16,6 +18,8 @@ use gstreamer_app as gst_app;
 use serde::Serialize;
 use std::{
     collections::HashMap,
+    io::{Read, Write},
+    net::{TcpListener, TcpStream},
     time::{Duration, Instant},
 };
 
@@ -45,6 +49,10 @@ pub struct SyncRecoveryReport {
     pub discontinuities: usize,
     pub discarded_access_units: u64,
     pub decoded_with_pts: usize,
+    pub aead_records: usize,
+    pub aead_bytes: usize,
+    pub tcp_records: usize,
+    pub tcp_bytes: usize,
     pub recovered_after_injected_loss: bool,
     pub latency: LatencySummary,
     pub elapsed_ms: u128,
@@ -63,6 +71,16 @@ struct LoopStats {
     recovered: bool,
     sent_at: HashMap<u64, Instant>,
     latencies_ms: Vec<f64>,
+    /// Test-only AEAD pair proving each emitted access unit survives the
+    /// encrypted media-record boundary before decoding.
+    aead_seal: Option<RecordCipher>,
+    aead_open: Option<RecordCipher>,
+    aead_records: usize,
+    aead_bytes: usize,
+    tcp_client: Option<TcpStream>,
+    tcp_server: Option<TcpStream>,
+    tcp_records: usize,
+    tcp_bytes: usize,
 }
 
 fn deadline_remaining(deadline: Instant) -> gst::ClockTime {
@@ -214,7 +232,51 @@ fn drain_encoded(
                     stats.recovered = true;
                     stats.awaiting_recovery = false;
                 }
-                let mut buffer = gst::Buffer::from_mut_slice(unit.bytes);
+                let plaintext = if let (Some(seal), Some(open), Some(client), Some(server)) = (
+                    stats.aead_seal.as_mut(),
+                    stats.aead_open.as_mut(),
+                    stats.tcp_client.as_mut(),
+                    stats.tcp_server.as_mut(),
+                ) {
+                    let sealed = seal
+                        .seal(&unit.bytes)
+                        .map_err(|e| format!("AEAD media seal failed: {e}"))?;
+                    let length = u32::try_from(sealed.len())
+                        .map_err(|_| "media record is too large".to_string())?;
+                    client
+                        .write_all(&length.to_be_bytes())
+                        .map_err(|e| format!("media TCP write failed: {e}"))?;
+                    client
+                        .write_all(&sealed)
+                        .map_err(|e| format!("media TCP write failed: {e}"))?;
+                    client
+                        .flush()
+                        .map_err(|e| format!("media TCP flush failed: {e}"))?;
+
+                    let mut length_bytes = [0u8; 4];
+                    server
+                        .read_exact(&mut length_bytes)
+                        .map_err(|e| format!("media TCP read failed: {e}"))?;
+                    let length = u32::from_be_bytes(length_bytes) as usize;
+                    if length == 0 || length > MAX_RECORD_BYTES {
+                        return Err(format!("invalid media record length: {length}"));
+                    }
+                    let mut received = vec![0u8; length];
+                    server
+                        .read_exact(&mut received)
+                        .map_err(|e| format!("media TCP read failed: {e}"))?;
+                    let opened = open
+                        .open(&received)
+                        .map_err(|e| format!("AEAD media open failed: {e}"))?;
+                    stats.aead_records += 1;
+                    stats.aead_bytes += opened.len();
+                    stats.tcp_records += 1;
+                    stats.tcp_bytes += received.len();
+                    opened
+                } else {
+                    unit.bytes
+                };
+                let mut buffer = gst::Buffer::from_mut_slice(plaintext);
                 if let Some(writable) = buffer.get_mut() {
                     if let Some(pts_ns) = unit.pts_ns {
                         writable.set_pts(gst::ClockTime::from_nseconds(pts_ns));
@@ -350,7 +412,46 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
             height: HEIGHT,
         };
         let expected = geometry.rgba_size().ok_or("invalid geometry")?;
-        let mut stats = LoopStats::default();
+        // Fixed test key/session: this proves the media record boundary, not a
+        // real pairing or network transport.
+        let media_key = [0x5au8; 32];
+        let media_session = "00112233445566778899aabbccddeeff";
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .map_err(|e| format!("cannot bind media loopback listener: {e}"))?;
+        let tcp_client = TcpStream::connect(
+            listener
+                .local_addr()
+                .map_err(|e| format!("cannot read media loopback address: {e}"))?,
+        )
+        .map_err(|e| format!("cannot connect media loopback client: {e}"))?;
+        let (tcp_server, _) = listener
+            .accept()
+            .map_err(|e| format!("cannot accept media loopback client: {e}"))?;
+        tcp_client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("cannot set media loopback timeout: {e}"))?;
+        tcp_client
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("cannot set media loopback timeout: {e}"))?;
+        tcp_server
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("cannot set media loopback timeout: {e}"))?;
+        tcp_server
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("cannot set media loopback timeout: {e}"))?;
+        let mut stats = LoopStats {
+            aead_seal: Some(
+                RecordCipher::new(&media_key, media_session, Direction::ClientToHost)
+                    .map_err(|e| format!("cannot create AEAD media cipher: {e}"))?,
+            ),
+            aead_open: Some(
+                RecordCipher::new(&media_key, media_session, Direction::ClientToHost)
+                    .map_err(|e| format!("cannot create AEAD media cipher: {e}"))?,
+            ),
+            tcp_client: Some(tcp_client),
+            tcp_server: Some(tcp_server),
+            ..LoopStats::default()
+        };
 
         for index in 0..FRAME_COUNT {
             let sample = raw_sink
@@ -427,7 +528,11 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
         let verified = stats.decoded_frames > 0
             && stats.discontinuities >= 2
             && stats.recovered
-            && latency.samples > 0;
+            && latency.samples > 0
+            && stats.aead_records > 0
+            && stats.aead_bytes > 0
+            && stats.tcp_records > 0
+            && stats.tcp_bytes > 0;
         let report = SyncRecoveryReport {
             encoder,
             decoder: decoder.to_string(),
@@ -437,6 +542,10 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
             discontinuities: stats.discontinuities,
             discarded_access_units,
             decoded_with_pts: stats.decoded_with_pts,
+            aead_records: stats.aead_records,
+            aead_bytes: stats.aead_bytes,
+            tcp_records: stats.tcp_records,
+            tcp_bytes: stats.tcp_bytes,
             recovered_after_injected_loss: stats.recovered,
             latency,
             elapsed_ms: started.elapsed().as_millis(),
@@ -548,5 +657,9 @@ mod tests {
         assert!(report.recovered_after_injected_loss);
         assert!(report.decoded_frames > 0);
         assert!(report.latency.samples > 0);
+        assert!(report.aead_records > 0);
+        assert!(report.aead_bytes > 0);
+        assert!(report.tcp_records > 0);
+        assert!(report.tcp_bytes > 0);
     }
 }
