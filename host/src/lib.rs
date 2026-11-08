@@ -10,6 +10,7 @@ pub mod decoder_sync;
 pub mod keyframe_control;
 pub mod live;
 pub mod media;
+pub mod media_stream;
 pub mod portal;
 pub mod protocol;
 pub mod session;

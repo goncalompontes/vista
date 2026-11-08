@@ -20,7 +20,7 @@ The host now also has a **transport-neutral, permission-scoped H.264 access-unit
 ## M2 — secure remote session
 
 - [ ] Host-client authenticated pairing and session state machine.
-- [ ] Low-latency encrypted transport and reconnect/backpressure.
+- [ ] Low-latency encrypted transport and reconnect/backpressure. A two-process localhost `media-stream` diagnostic now seals real synthetic H.264 access units with ChaCha20-Poly1305 and decodes all 12 in a second process (12 records / 60,997 bytes, 2,764,800 decoded bytes in one run). The test key is not paired, there is no network authentication, congestion control, reconnect/backpressure or media to iOS yet.
 - [ ] Input translation: pointer, touch gestures, keyboard and modifiers.
 - [ ] Per-stream permissions and revoke mechanism.
 

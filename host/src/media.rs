@@ -26,7 +26,7 @@ impl H264Encoder {
         }
     }
 
-    fn settings(self) -> &'static str {
+    pub(crate) fn settings(self) -> &'static str {
         match self {
             Self::Nvidia => "preset=p1 bframes=0 bitrate=3000",
             Self::X264 => "tune=zerolatency speed-preset=ultrafast bitrate=3000 bframes=0",
