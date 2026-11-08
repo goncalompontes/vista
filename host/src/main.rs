@@ -285,7 +285,7 @@ fn run() -> Result<(), NiriError> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!(
-                    "Sync recovery verified: {:?} -> {}, {} encoded buffers, {} decoded frames ({} with PTS), {} discontinuities, {} suppressed units, {} AEAD records / {} bytes, {} TCP media records / {} bytes, in {} ms.",
+                    "Sync recovery verified: {:?} -> {}, {} encoded buffers, {} decoded frames ({} with PTS), {} discontinuities, {} suppressed units, {} keyframe request(s), {} encoder restart(s), {} AEAD records / {} bytes, {} TCP media records / {} bytes, in {} ms.",
                     report.encoder,
                     report.decoder,
                     report.encoded_buffers,
@@ -293,6 +293,8 @@ fn run() -> Result<(), NiriError> {
                     report.decoded_with_pts,
                     report.discontinuities,
                     report.discarded_access_units,
+                    report.keyframe_requests,
+                    report.encoder_restarts,
                     report.aead_records,
                     report.aead_bytes,
                     report.tcp_records,
