@@ -19,6 +19,7 @@ fn usage() {
     eprintln!("       vista-host bridge-test [--json]");
     eprintln!("       vista-host sync-test [--json]");
     eprintln!("       vista-host capture-h264 --confirm [--json]");
+    eprintln!("       vista-host pipewire-loopback [--json]");
 }
 
 fn run() -> Result<(), NiriError> {
@@ -321,6 +322,28 @@ fn run() -> Result<(), NiriError> {
                     report.encoder
                 );
                 println!("Arbitrary Niri window-ID capture remains unverified.");
+            }
+        }
+        [command] if command.as_str() == "pipewire-loopback" => {
+            eprintln!(
+                "Running a local synthetic PipeWire video-node loopback; no portal consent, window capture or network access."
+            );
+            let report = vista_host::pipewire_loopback::pipewire_loopback().map_err(|error| {
+                NiriError::Unavailable(format!("PipeWire loopback failed: {error}"))
+            })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "PipeWire loopback verified: {} RGBA frames at {}x{} ({} bytes) in {} ms from synthetic node {}; portal consent={}.",
+                    report.frames,
+                    report.width,
+                    report.height,
+                    report.bytes,
+                    report.elapsed_ms,
+                    report.node_name,
+                    report.portal_consent
+                );
             }
         }
         [command] if command.as_str() == "watch" => watch_windows(json)?,

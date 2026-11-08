@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod decoder_sync;
 pub mod live;
 pub mod media;
+pub mod pipewire_loopback;
 pub mod portal;
 pub mod session;
 pub mod sync;
