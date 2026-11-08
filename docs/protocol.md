@@ -368,6 +368,12 @@ native action. The target generation is derived from the Niri socket/session
 name plus the window id because Niri exposes no compositor boot id through its
 CLI.
 
+`host/src/control_lease.rs` adds a revocable per-session control lease over the
+same contract. A lease owns the target, action grants and input permissions;
+revocation advances the grant epoch, drops every grant and releases all held
+buttons/keys, so queued actions or input from the old grant are rejected. Re-granting
+also advances the epoch. The lease is not yet wired to the network transport.
+
 Fixtures shared with the Swift models are in
 [`docs/fixtures/capabilities-v1.json`](fixtures/capabilities-v1.json). Rust
 tests decode and validate them, and `vista-host capability-test --json` exercises
