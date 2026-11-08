@@ -21,6 +21,14 @@
         <p class="hint">Use Firefox responsive mode (Ctrl+Shift+M) for precise viewport and touch emulation.</p>
       </div>
       <div class="inspector-section">
+        <p class="eyebrow">CAPABILITY BACKEND</p>
+        <div class="segmented" role="group" aria-label="Simulated host backend">
+          <button type="button" class="device-button active" data-backend="niri" aria-pressed="true">Niri</button>
+          <button type="button" class="device-button" data-backend="alternate" aria-pressed="false">Simulated</button>
+        </div>
+        <p class="hint">The same action renderer consumes either host snapshot. No view branches on the backend name.</p>
+      </div>
+      <div class="inspector-section">
         <p class="eyebrow">NAVIGATION</p>
         <button type="button" class="inspector-nav" data-go="welcome">Welcome</button>
         <button type="button" class="inspector-nav" data-go="library">App library</button>
@@ -33,6 +41,8 @@
           <span>Screen</span><strong id="debug-screen">welcome</strong>
           <span>Filter</span><strong id="debug-filter">all</strong>
           <span>Selected</span><strong id="debug-app">none</strong>
+          <span>Backend</span><strong id="debug-backend">niri</strong>
+          <span>Cap. rev</span><strong id="debug-capability">12</strong>
         </div>
         <button type="button" class="reset-button" id="reset-preview">Reset preview</button>
       </div>
