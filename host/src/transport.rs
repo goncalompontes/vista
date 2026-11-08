@@ -302,12 +302,21 @@ impl HostControlServer {
     }
 
     pub fn accept_and_run(self) -> Result<ServerStats, TransportError> {
+        self.accept_and_run_with_hook(|| {})
+    }
+
+    /// Accept one client and invoke `hook` after each authenticated
+    /// `KeyframeRequest` is handled. The hook runs on the server thread.
+    pub fn accept_and_run_with_hook<F>(self, mut hook: F) -> Result<ServerStats, TransportError>
+    where
+        F: FnMut(),
+    {
         let deadline = Instant::now() + SERVER_ACCEPT_TIMEOUT;
         loop {
             match self.listener.accept() {
                 Ok((stream, _)) => {
                     stream.set_nonblocking(false)?;
-                    return serve(stream, self.host, self.now_secs);
+                    return serve(stream, self.host, self.now_secs, &mut hook);
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
@@ -321,11 +330,15 @@ impl HostControlServer {
     }
 }
 
-fn serve(
+fn serve<F>(
     stream: TcpStream,
     mut host: HostSession,
     now_secs: u64,
-) -> Result<ServerStats, TransportError> {
+    hook: &mut F,
+) -> Result<ServerStats, TransportError>
+where
+    F: FnMut(),
+{
     let mut connection = Connection::new(stream)?;
     let mut stats = ServerStats::default();
 
@@ -376,6 +389,11 @@ fn serve(
         };
         stats.encrypted_records += 1;
         let response = host.handle(&envelope, now_secs)?;
+        if matches!(&envelope.body, ControlMessage::KeyframeRequest { .. })
+            && host.state() == HostState::Active
+        {
+            hook();
+        }
         if let Some(response) = response {
             if matches!(&response.body, ControlMessage::Pong { .. }) {
                 stats.pong_sent = true;

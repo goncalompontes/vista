@@ -20,6 +20,7 @@ fn usage() {
     eprintln!("       vista-host codec-test [--json]");
     eprintln!("       vista-host bridge-test [--json]");
     eprintln!("       vista-host sync-test [--json]");
+    eprintln!("       vista-host keyframe-control-test [--json]");
     eprintln!("       vista-host capture-h264 --confirm [--json]");
     eprintln!("       vista-host capture-output --confirm [--json]");
     eprintln!("       vista-host pipewire-loopback [--json]");
@@ -386,6 +387,27 @@ fn run() -> Result<(), NiriError> {
                     report.encode_decode_ms,
                     report.capture_ms,
                     report.portal_consent
+                );
+            }
+        }
+        [command] if command.as_str() == "keyframe-control-test" => {
+            eprintln!(
+                "Running an authenticated localhost control request -> encoder restart test; no capture, media transport or external network."
+            );
+            let report =
+                vista_host::keyframe_control::keyframe_control_probe().map_err(|error| {
+                    NiriError::Unavailable(format!("keyframe control test failed: {error}"))
+                })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Authenticated keyframe request verified={}: server requests={}, producer requests={}, encoder restarts={}, decoded frames={}.",
+                    report.verified,
+                    report.server_keyframe_requests,
+                    report.external_keyframe_requests,
+                    report.encoder_restarts,
+                    report.decoded_frames
                 );
             }
         }
