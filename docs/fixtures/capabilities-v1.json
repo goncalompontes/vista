@@ -1,0 +1,219 @@
+{
+  "status": "implemented-contract-fixture",
+  "contract_version": 1,
+  "capability_snapshot": {
+    "v": 1,
+    "type": "capabilities.snapshot",
+    "connection_epoch": "c1",
+    "session_id": "s1",
+    "target_id": "w5",
+    "target_generation": "niri-boot1-w5",
+    "capability_revision": 12,
+    "grant_epoch": "g2",
+    "actions": [
+      {
+        "id": "window.focus",
+        "schema_version": 1,
+        "supported": true,
+        "enabled": true,
+        "authorization": "granted",
+        "parameters": "vista.empty.v1",
+        "presentation": {
+          "label": "Focus window",
+          "icon": "window.focus"
+        },
+        "suggested_bindings": []
+      },
+      {
+        "id": "window.maximize.set",
+        "schema_version": 1,
+        "supported": true,
+        "enabled": true,
+        "authorization": "granted",
+        "parameters": "vista.window.maximize.set.v1",
+        "presentation": {
+          "label": "Maximize"
+        },
+        "suggested_bindings": []
+      },
+      {
+        "id": "window.minimize",
+        "schema_version": 1,
+        "supported": true,
+        "enabled": false,
+        "reason": "No managed session is selected",
+        "authorization": "granted",
+        "parameters": "vista.empty.v1",
+        "presentation": {
+          "label": "Minimize"
+        },
+        "suggested_bindings": []
+      },
+      {
+        "id": "desktop.overview.show",
+        "schema_version": 1,
+        "supported": false,
+        "enabled": false,
+        "reason": "Backend does not implement overview",
+        "authorization": "required",
+        "parameters": "vista.empty.v1",
+        "presentation": {
+          "label": "Overview"
+        },
+        "suggested_bindings": []
+      },
+      {
+        "id": "example.vendor.special",
+        "schema_version": 1,
+        "supported": true,
+        "enabled": true,
+        "authorization": "granted",
+        "parameters": "vista.extension.v1",
+        "presentation": {
+          "label": "Vendor action"
+        },
+        "suggested_bindings": ["three_finger_swipe_left"]
+      }
+    ]
+  },
+  "action_request": {
+    "v": 1,
+    "type": "action.invoke",
+    "id": "r17",
+    "connection_epoch": "c1",
+    "session_id": "s1",
+    "grant_epoch": "g2",
+    "target_id": "w5",
+    "target_generation": "niri-boot1-w5",
+    "capability_revision": 12,
+    "action": "window.maximize.set",
+    "schema_version": 1,
+    "parameters": {
+      "value": true
+    }
+  },
+  "action_result": {
+    "v": 1,
+    "type": "action.result",
+    "id": "r17",
+    "connection_epoch": "c1",
+    "session_id": "s1",
+    "status": "completed",
+    "state": {
+      "maximized": true
+    },
+    "capability_revision": 13
+  },
+  "menu_snapshot": {
+    "v": 1,
+    "type": "menu.snapshot",
+    "connection_epoch": "c1",
+    "session_id": "s1",
+    "target_id": "w5",
+    "target_generation": "niri-boot1-w5",
+    "menu_revision": 4,
+    "items": [
+      {
+        "id": "file",
+        "label": "File",
+        "enabled": true,
+        "children": [
+          {
+            "id": "file.save",
+            "label": "Save",
+            "enabled": true
+          },
+          {
+            "id": "file.close",
+            "label": "Close",
+            "enabled": false
+          }
+        ]
+      }
+    ]
+  },
+  "input_events": [
+    {
+      "type": "pointer.absolute",
+      "x": 0.5,
+      "y": 0.5,
+      "geometry_epoch": 3
+    },
+    {
+      "type": "pointer.button",
+      "button": "primary",
+      "pressed": true
+    },
+    {
+      "type": "key.physical",
+      "usage": 4,
+      "pressed": true,
+      "repeat": false
+    },
+    {
+      "type": "text.commit",
+      "text": "hello"
+    },
+    {
+      "type": "input.cancel"
+    }
+  ],
+  "cases": [
+    {
+      "id": "allowed_action",
+      "expect": {
+        "status": "completed"
+      }
+    },
+    {
+      "id": "denied_action",
+      "expect": {
+        "status": "rejected",
+        "error_code": "permission_denied"
+      }
+    },
+    {
+      "id": "stale_target",
+      "expect": {
+        "status": "rejected",
+        "error_code": "stale_context"
+      }
+    },
+    {
+      "id": "unsupported_action",
+      "expect": {
+        "status": "rejected",
+        "error_code": "unsupported_action"
+      }
+    },
+    {
+      "id": "unavailable_action",
+      "expect": {
+        "status": "rejected",
+        "error_code": "backend_unavailable"
+      }
+    },
+    {
+      "id": "malformed_parameters",
+      "expect": {
+        "status": "rejected",
+        "error_code": "invalid_parameters"
+      }
+    },
+    {
+      "id": "view_only_input",
+      "expect": {
+        "status": "rejected",
+        "error_code": "permission_required",
+        "native_effects": 0
+      }
+    },
+    {
+      "id": "disconnect_after_close",
+      "expect": {
+        "status": "outcome_unknown",
+        "automatic_replay": false
+      }
+    }
+  ]
+}

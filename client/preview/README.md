@@ -28,7 +28,13 @@ For debugging in Firefox:
 - Edit `index.html`, `styles.css` or `app.js`, then refresh the tab.
 - The preview logs state transitions under `[Vista preview]` in the console.
 - Run `npm test --prefix client/preview` from the repository root to test
-  the navigation state machine (Node 22+ recommended).
+  the navigation state machine and the capability demo (Node 22+ recommended).
+- The stream screen's **Host actions** panel is driven by
+  `capabilities.js`. Use the inspector's **Capability backend** toggle to show
+  the same renderer against a Niri capability set and a simulated alternate
+  backend. Unsupported, disabled and denied actions stay visibly unavailable;
+  allowed actions update the capability revision and visible state. This is a
+  local contract demonstration, not native action execution.
 
 The server binds only to loopback. Do not change it to `0.0.0.0` on a
 public network without understanding the exposure.
