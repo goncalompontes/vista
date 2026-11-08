@@ -21,6 +21,7 @@ fn usage() {
     eprintln!("       vista-host bridge-test [--json]");
     eprintln!("       vista-host sync-test [--json]");
     eprintln!("       vista-host capture-h264 --confirm [--json]");
+    eprintln!("       vista-host capture-output --confirm [--json]");
     eprintln!("       vista-host pipewire-loopback [--json]");
     eprintln!("       vista-host capability-test [--json]");
     eprintln!("       vista-host protocol-test [--json]");
@@ -355,6 +356,33 @@ fn run() -> Result<(), NiriError> {
                     report.bytes,
                     report.elapsed_ms,
                     report.node_name,
+                    report.portal_consent
+                );
+            }
+        }
+        [command, confirm]
+            if command.as_str() == "capture-output" && confirm.as_str() == "--confirm" =>
+        {
+            eprintln!(
+                "Vista will capture the entire active output in memory via grim, encode one frame and decode it. Pixels are not saved or transmitted. This is a wlr-screencopy fallback, not portal per-window capture."
+            );
+            let report = vista_host::output_capture::output_capture_probe().map_err(|error| {
+                NiriError::Unavailable(format!("output capture diagnostic failed: {error}"))
+            })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Output capture verified: {}x{} RGB->{} RGBA bytes, {:?} -> {}, {} encoded / {} decoded bytes in {} ms (capture {} ms); portal consent={}.",
+                    report.width,
+                    report.height,
+                    report.rgba_bytes,
+                    report.encoder,
+                    report.decoder,
+                    report.encoded_bytes,
+                    report.decoded_bytes,
+                    report.encode_decode_ms,
+                    report.capture_ms,
                     report.portal_consent
                 );
             }
