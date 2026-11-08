@@ -45,6 +45,7 @@ pub struct SyncRecoveryReport {
     pub discontinuities: usize,
     pub discarded_access_units: u64,
     pub decoded_with_pts: usize,
+    pub keyframe_requests: usize,
     pub encoder_restarts: usize,
     pub recovered_after_injected_loss: bool,
     pub latency: LatencySummary,
@@ -64,7 +65,9 @@ struct LoopStats {
     recovered: bool,
     sent_at: HashMap<u64, Instant>,
     latencies_ms: Vec<f64>,
+    keyframe_requests: usize,
     encoder_restarts: usize,
+    requested: bool,
 }
 
 fn deadline_remaining(deadline: Instant) -> gst::ClockTime {
@@ -352,6 +355,7 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
             height: HEIGHT,
         };
         let expected = geometry.rgba_size().ok_or("invalid geometry")?;
+        let (request_tx, request_rx) = std::sync::mpsc::channel::<()>();
         let mut stats = LoopStats::default();
 
         for index in 0..FRAME_COUNT {
@@ -394,7 +398,18 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
                 &mut stats,
             )?;
             drain_decoded(&decoded_sink, &mut stats, gst::ClockTime::ZERO)?;
-            if index == INJECT_AFTER {
+            // The consumer requests a keyframe when it is waiting for an IDR
+            // after a discontinuity. A future transport maps the control
+            // protocol's KeyframeRequest to this channel; here the channel is
+            // the transport boundary.
+            if stats.injected && !stats.requested && gate.awaiting_idr() {
+                request_tx
+                    .send(())
+                    .map_err(|_| "keyframe request channel closed")?;
+                stats.keyframe_requests += 1;
+                stats.requested = true;
+            }
+            if request_rx.try_recv().is_ok() {
                 // Producer-side keyframe request: restart the encoder so the
                 // next access unit is a fresh SPS/PPS IDR. Upstream
                 // force-key-unit events were not honored through h264parse on
@@ -455,7 +470,8 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
             && stats.discontinuities >= 2
             && stats.recovered
             && latency.samples > 0
-            && stats.encoder_restarts >= 1;
+            && stats.keyframe_requests >= 1
+            && stats.encoder_restarts == stats.keyframe_requests;
         let report = SyncRecoveryReport {
             encoder,
             decoder: decoder.to_string(),
@@ -465,6 +481,7 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
             discontinuities: stats.discontinuities,
             discarded_access_units,
             decoded_with_pts: stats.decoded_with_pts,
+            keyframe_requests: stats.keyframe_requests,
             encoder_restarts: stats.encoder_restarts,
             recovered_after_injected_loss: stats.recovered,
             latency,
@@ -577,6 +594,7 @@ mod tests {
         assert!(report.recovered_after_injected_loss);
         assert!(report.decoded_frames > 0);
         assert!(report.latency.samples > 0);
-        assert!(report.encoder_restarts >= 1);
+        assert!(report.keyframe_requests >= 1);
+        assert_eq!(report.encoder_restarts, report.keyframe_requests);
     }
 }
