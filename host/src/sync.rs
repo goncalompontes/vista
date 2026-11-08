@@ -45,6 +45,7 @@ pub struct SyncRecoveryReport {
     pub discontinuities: usize,
     pub discarded_access_units: u64,
     pub decoded_with_pts: usize,
+    pub encoder_restarts: usize,
     pub recovered_after_injected_loss: bool,
     pub latency: LatencySummary,
     pub elapsed_ms: u128,
@@ -63,6 +64,7 @@ struct LoopStats {
     recovered: bool,
     sent_at: HashMap<u64, Instant>,
     latencies_ms: Vec<f64>,
+    encoder_restarts: usize,
 }
 
 fn deadline_remaining(deadline: Instant) -> gst::ClockTime {
@@ -84,16 +86,16 @@ fn build_pipeline(description: &str) -> Result<gst::Pipeline, String> {
 }
 
 fn encoder_description(encoder: H264Encoder) -> String {
-    // The short GOP guarantees a fresh IDR after the injected loss. Recovery is
-    // still decided by the gate inspecting Annex-B NAL headers, not by flags.
+    // A long GOP ensures no periodic IDR falls inside the test window: recovery
+    // after the injected loss must come from the explicit producer restart.
     let settings = match encoder {
         H264Encoder::Nvidia => {
-            "preset=p1 bframes=0 bitrate=3000 gop-size=4 repeat-sequence-header=true"
+            "preset=p1 bframes=0 bitrate=3000 gop-size=250 repeat-sequence-header=true"
         }
         H264Encoder::X264 => {
-            "tune=zerolatency speed-preset=ultrafast bitrate=3000 bframes=0 key-int-max=4"
+            "tune=zerolatency speed-preset=ultrafast bitrate=3000 bframes=0 key-int-max=250"
         }
-        H264Encoder::OpenH264 => "bitrate=3000000 gop-size=4",
+        H264Encoder::OpenH264 => "bitrate=3000000 gop-size=250",
     };
     format!(
         "appsrc name=raw_source is-live=false format=time \
@@ -297,7 +299,7 @@ fn summarize(mut samples: Vec<f64>) -> LatencySummary {
 
 fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryReport, String> {
     let raw = build_pipeline(&raw_description())?;
-    let encoded = build_pipeline(&encoder_description(encoder))?;
+    let mut encoded = build_pipeline(&encoder_description(encoder))?;
     let decoded = build_pipeline(&decoder_description(decoder))?;
 
     let result = (|| {
@@ -306,12 +308,12 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
             .ok_or("missing raw_sink")?
             .downcast::<gst_app::AppSink>()
             .map_err(|_| "invalid raw_sink")?;
-        let encoded_source = encoded
+        let mut encoded_source = encoded
             .by_name("raw_source")
             .ok_or("missing raw_source")?
             .downcast::<gst_app::AppSrc>()
             .map_err(|_| "invalid raw_source")?;
-        let encoded_sink = encoded
+        let mut encoded_sink = encoded
             .by_name("encoded_sink")
             .ok_or("missing encoded_sink")?
             .downcast::<gst_app::AppSink>()
@@ -392,6 +394,31 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
                 &mut stats,
             )?;
             drain_decoded(&decoded_sink, &mut stats, gst::ClockTime::ZERO)?;
+            if index == INJECT_AFTER {
+                // Producer-side keyframe request: restart the encoder so the
+                // next access unit is a fresh SPS/PPS IDR. Upstream
+                // force-key-unit events were not honored through h264parse on
+                // the tested NVENC pipeline, so restart is the conservative
+                // mechanism until a transport can request an IDR directly.
+                encoded
+                    .set_state(gst::State::Null)
+                    .map_err(|error| format!("cannot stop encoder for restart: {error}"))?;
+                encoded = build_pipeline(&encoder_description(encoder))?;
+                encoded_source = encoded
+                    .by_name("raw_source")
+                    .ok_or("missing raw_source after restart")?
+                    .downcast::<gst_app::AppSrc>()
+                    .map_err(|_| "invalid raw_source after restart")?;
+                encoded_sink = encoded
+                    .by_name("encoded_sink")
+                    .ok_or("missing encoded_sink after restart")?
+                    .downcast::<gst_app::AppSink>()
+                    .map_err(|_| "invalid encoded_sink after restart")?;
+                encoded
+                    .set_state(gst::State::Playing)
+                    .map_err(|error| format!("cannot restart encoder: {error}"))?;
+                stats.encoder_restarts += 1;
+            }
             if deadline <= Instant::now() {
                 return Err("encode/decode deadline reached".into());
             }
@@ -427,7 +454,8 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
         let verified = stats.decoded_frames > 0
             && stats.discontinuities >= 2
             && stats.recovered
-            && latency.samples > 0;
+            && latency.samples > 0
+            && stats.encoder_restarts >= 1;
         let report = SyncRecoveryReport {
             encoder,
             decoder: decoder.to_string(),
@@ -437,6 +465,7 @@ fn run_pipeline(encoder: H264Encoder, decoder: &str) -> Result<SyncRecoveryRepor
             discontinuities: stats.discontinuities,
             discarded_access_units,
             decoded_with_pts: stats.decoded_with_pts,
+            encoder_restarts: stats.encoder_restarts,
             recovered_after_injected_loss: stats.recovered,
             latency,
             elapsed_ms: started.elapsed().as_millis(),
@@ -548,5 +577,6 @@ mod tests {
         assert!(report.recovered_after_injected_loss);
         assert!(report.decoded_frames > 0);
         assert!(report.latency.samples > 0);
+        assert!(report.encoder_restarts >= 1);
     }
 }
