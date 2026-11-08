@@ -8,7 +8,7 @@ Inspired by [Sill](https://github.com/Saffsanity/sill); not a fork or a drop-in 
 
 **Milestone 0 — live Linux host discovery.** The Rust host CLI discovers running Niri windows by ID, emits an incremental event stream for the window catalog, and probes the desktop ScreenCast portal without requesting capture. The iOS/iPadOS SwiftUI preview is now in `client/`, with no network connection or media yet. Vista does **not** yet capture pixels, stream video, authenticate clients, or launch isolated sessions. See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).
 
-A versioned, transport-neutral control protocol now exists in `host/src/protocol.rs`: bounded JSON frames, explicit version negotiation, a 256-bit out-of-band pairing secret with HMAC-SHA256 confirmation, HKDF session keys, strict sequencing, expiring offers and deny-by-default permissions. It is verified in memory by `protocol-test` and the fixtures in [docs/protocol.md](docs/protocol.md), but **no network transport, frame encryption, discovery or iOS integration is implemented yet**.
+A versioned, transport-neutral control protocol now exists in `host/src/protocol.rs`: bounded JSON frames, explicit version negotiation, a 256-bit out-of-band pairing secret with HMAC-SHA256 confirmation, HKDF session keys, strict sequencing, expiring offers and deny-by-default permissions. It is verified in memory by `protocol-test`, and a localhost-only TCP loopback (`protocol-loopback`) now pairs and exchanges ChaCha20-Poly1305-encrypted control records. The fixtures and contract are in [docs/protocol.md](docs/protocol.md). There is still **no production listener, discovery, TLS/QUIC/WebRTC media transport or iOS integration**.
 
 ## Develop
 
@@ -25,6 +25,8 @@ cargo run -- watch --json
 cargo run -- capabilities --json
 # In-memory control-protocol pairing/session diagnostic; no network, capture or input:
 cargo run -- protocol-test --json
+# Localhost-only TCP pairing + encrypted control-record loopback; no external listener:
+cargo run -- protocol-loopback --json
 ```
 
 Window IDs come from the active Niri session and can change after a window closes or the compositor restarts. `--json` supports programmatic consumers. When running through a tool or service with a sanitized environment, export `NIRI_SOCKET` from the active Niri session before invoking the host CLI.

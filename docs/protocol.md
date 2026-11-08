@@ -145,8 +145,36 @@ info = "vista-session-v1\n" || pairing_id || "\n" || session_id || "\n" || trans
 ```
 
 64 bytes are expanded and split into independent **client-to-host** and
-**host-to-client** keys. They are *derived but not yet used*: the transport
-record layer and its nonce discipline are not implemented.
+**host-to-client** keys.
+
+### Encrypted record layer (loopback diagnostic)
+
+After `PairingAccepted`, both sides switch from plaintext control frames to
+ChaCha20-Poly1305 records:
+
+```text
++----------------------+--------------------------------------+
+| u32 big-endian length| ciphertext incl. 16-byte tag         |
++----------------------+--------------------------------------+
+```
+
+- Plaintext is the same JSON `Envelope`; the maximum plaintext is 64 KiB.
+- The nonce is an implicit 12-byte value: four zero bytes followed by a
+  big-endian 64-bit per-direction counter starting at 0. Both sides increment
+  after every record; replayed or reordered records fail authentication.
+- The AAD is `"vista-record-v1" || session_id || direction`, where direction is
+  `1` for client-to-host and `2` for host-to-client. This binds a record to its
+  session and prevents reflection.
+- The client encrypts with `client_to_host` and decrypts with `host_to_client`;
+  the host does the opposite.
+- Keys are unique per handshake because `pairing_id` and both nonces are fresh.
+
+`vista-host protocol-loopback --json` binds `127.0.0.1:0`, performs the full
+pairing over a real TCP stream, switches to encrypted records and verifies an
+encrypted `SessionOpen`, `KeyframeRequest`, `Ping`/`Pong` and `SessionClose`.
+It is a local diagnostic only. It is **not** TLS/QUIC/WebRTC, does not hide
+metadata or packet sizes, has no congestion control, reconnect logic or
+discovery, and must not be exposed to an untrusted network in this form.
 
 ## Sessions and permissions
 

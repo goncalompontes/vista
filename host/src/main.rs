@@ -13,6 +13,7 @@ fn usage() {
         "Usage: vista-host <doctor|capabilities|windows|window ID|watch|protocol-test> [--json]"
     );
     eprintln!("       vista-host protocol-test [--json]");
+    eprintln!("       vista-host protocol-loopback [--json]");
 }
 
 fn run() -> Result<(), NiriError> {
@@ -79,6 +80,32 @@ fn run() -> Result<(), NiriError> {
                 }
                 println!(
                     "Niri per-window capture: NOT VERIFIED (advertised portal sources do not prove it works)"
+                );
+            }
+        }
+        [command] if command.as_str() == "protocol-loopback" => {
+            eprintln!(
+                "Running a localhost-only AEAD control-channel loopback; no external listener is opened."
+            );
+            let report = vista_host::transport::protocol_loopback().map_err(|err| {
+                NiriError::Unavailable(format!("transport loopback failed: {err}"))
+            })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Encrypted loopback verified={}: {} handshake frames, {} server records, {} client writes/{} reads, keyframe requests={} at {}.",
+                    report.verified,
+                    report.handshake_frames,
+                    report.server_encrypted_records,
+                    report.client_encrypted_writes,
+                    report.client_encrypted_reads,
+                    report.keyframe_requests,
+                    report.address
+                );
+                println!(
+                    "Protocol {}; ChaCha20-Poly1305 records with implicit nonce counters and session/direction AAD; no external listener.",
+                    report.protocol
                 );
             }
         }
@@ -155,6 +182,32 @@ fn run() -> Result<(), NiriError> {
                     window
                         .workspace_id
                         .map_or_else(|| "unknown".into(), |id| id.to_string())
+                );
+            }
+        }
+        [command] if command.as_str() == "protocol-loopback" => {
+            eprintln!(
+                "Running a localhost-only AEAD control-channel loopback; no external listener is opened."
+            );
+            let report = vista_host::transport::protocol_loopback().map_err(|err| {
+                NiriError::Unavailable(format!("transport loopback failed: {err}"))
+            })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Encrypted loopback verified={}: {} handshake frames, {} server records, {} client writes/{} reads, keyframe requests={} at {}.",
+                    report.verified,
+                    report.handshake_frames,
+                    report.server_encrypted_records,
+                    report.client_encrypted_writes,
+                    report.client_encrypted_reads,
+                    report.keyframe_requests,
+                    report.address
+                );
+                println!(
+                    "Protocol {}; ChaCha20-Poly1305 records with implicit nonce counters and session/direction AAD; no external listener.",
+                    report.protocol
                 );
             }
         }

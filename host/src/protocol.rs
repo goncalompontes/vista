@@ -586,6 +586,10 @@ impl HostSession {
         self.keys.as_ref()
     }
 
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
     pub fn permissions(&self) -> PermissionSet {
         self.permissions
     }
@@ -1064,6 +1068,25 @@ impl ClientSession {
                 actual: other.name(),
             }),
         }
+    }
+
+    pub fn session_close(&mut self, reason: &str) -> Result<Envelope, ProtocolError> {
+        if self.state != ClientState::Active {
+            return Err(ProtocolError::InvalidTransition {
+                expected: "an active session",
+                actual: "another state",
+            });
+        }
+        let envelope = Envelope::new(
+            self.next_client_seq,
+            ControlMessage::SessionClose {
+                session_id: self.session_id.clone(),
+                reason: reason.to_owned(),
+            },
+        );
+        self.next_client_seq = self.next_client_seq.wrapping_add(1);
+        self.state = ClientState::Closed;
+        Ok(envelope)
     }
 }
 

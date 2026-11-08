@@ -82,10 +82,14 @@ keys; offers expire after 120 seconds. Video, audio, input and clipboard are
 denied by default, and the host re-checks every requested permission before a
 session becomes active.
 
-This is a control-plane boundary only. There is **no listener, discovery,
-TLS/QUIC/WebRTC transport, frame encryption or iOS client**; the derived keys
-are not yet used by an AEAD layer. It also has no forward secrecy, host identity
-signature or external audit. The full contract, threat model and
+After pairing, a bounded ChaCha20-Poly1305 record layer encrypts control
+frames with implicit per-direction nonce counters and AAD bound to the session
+and direction. `protocol-loopback` exercises the full pairing and encrypted
+`SessionOpen`/`KeyframeRequest`/`Ping` over a real `127.0.0.1` TCP socket. This
+is a loopback diagnostic and record boundary, **not** a production transport:
+there is no public listener, discovery, TLS/QUIC/WebRTC, metadata protection,
+congestion control or iOS client, and the protocol has no forward secrecy, host
+identity signature or external audit. The full contract, threat model and
 WebRTC-versus-custom transport analysis are in [protocol.md](protocol.md).
 `vista-host protocol-test --json` verifies the in-memory handshake and the
 wrong-secret, replay, expiry, permission-escalation and version-mismatch paths.
