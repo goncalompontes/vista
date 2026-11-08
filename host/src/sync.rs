@@ -16,6 +16,10 @@ use gstreamer_app as gst_app;
 use serde::Serialize;
 use std::{
     collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -26,6 +30,22 @@ const WIDTH: u32 = 320;
 const HEIGHT: u32 = 180;
 const WAIT: Duration = Duration::from_secs(10);
 const FRAME_PTS_NS: u64 = 1_000_000_000 / 30;
+
+/// A cloneable request handle. A control transport can call `request()` when
+/// an authenticated client sends `KeyframeRequest`; the producer loop takes the
+/// flag and restarts the encoder.
+#[derive(Clone, Default)]
+pub struct KeyframeRequestHandle(Arc<AtomicBool>);
+
+impl KeyframeRequestHandle {
+    pub fn request(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    fn take(&self) -> bool {
+        self.0.swap(false, Ordering::SeqCst)
+    }
+}
 
 #[derive(Debug, Default, PartialEq, Serialize)]
 pub struct LatencySummary {
@@ -46,6 +66,7 @@ pub struct SyncRecoveryReport {
     pub discarded_access_units: u64,
     pub decoded_with_pts: usize,
     pub keyframe_requests: usize,
+    pub external_keyframe_requests: usize,
     pub encoder_restarts: usize,
     pub restart_enabled: bool,
     pub recovered_after_injected_loss: bool,
@@ -67,6 +88,7 @@ struct LoopStats {
     sent_at: HashMap<u64, Instant>,
     latencies_ms: Vec<f64>,
     keyframe_requests: usize,
+    external_keyframe_requests: usize,
     encoder_restarts: usize,
     requested: bool,
 }
@@ -305,6 +327,8 @@ fn run_pipeline(
     encoder: H264Encoder,
     decoder: &str,
     enable_restart: bool,
+    external_request: Option<&KeyframeRequestHandle>,
+    internal_requests: bool,
 ) -> Result<SyncRecoveryReport, String> {
     let raw = build_pipeline(&raw_description())?;
     let mut encoded = build_pipeline(&encoder_description(encoder))?;
@@ -407,14 +431,21 @@ fn run_pipeline(
             // after a discontinuity. A future transport maps the control
             // protocol's KeyframeRequest to this channel; here the channel is
             // the transport boundary.
-            if stats.injected && !stats.requested && gate.awaiting_idr() {
+            let external = external_request
+                .map(KeyframeRequestHandle::take)
+                .unwrap_or(false);
+            if external {
+                stats.keyframe_requests += 1;
+                stats.external_keyframe_requests += 1;
+            }
+            if stats.injected && internal_requests && !stats.requested && gate.awaiting_idr() {
                 request_tx
                     .send(())
                     .map_err(|_| "keyframe request channel closed")?;
                 stats.keyframe_requests += 1;
                 stats.requested = true;
             }
-            if enable_restart && request_rx.try_recv().is_ok() {
+            if enable_restart && (external || request_rx.try_recv().is_ok()) {
                 // Producer-side keyframe request: restart the encoder so the
                 // next access unit is a fresh SPS/PPS IDR. Upstream
                 // force-key-unit events were not honored through h264parse on
@@ -487,6 +518,7 @@ fn run_pipeline(
             discarded_access_units,
             decoded_with_pts: stats.decoded_with_pts,
             keyframe_requests: stats.keyframe_requests,
+            external_keyframe_requests: stats.external_keyframe_requests,
             encoder_restarts: stats.encoder_restarts,
             restart_enabled: enable_restart,
             recovered_after_injected_loss: stats.recovered,
@@ -519,6 +551,27 @@ pub fn synthetic_sync_recovery() -> Result<SyncRecoveryReport, String> {
 /// Same diagnostic with the producer-side restart explicitly enabled or
 /// disabled. The no-restart variant proves that the 250-frame GOP cannot
 /// recover the injected loss on its own.
+/// Runs with an external request handle and no internal consumer request. A
+/// control transport can request a keyframe through the handle.
+pub fn synthetic_sync_recovery_with_external_request(
+    request: &KeyframeRequestHandle,
+) -> Result<SyncRecoveryReport, String> {
+    let caps = probe_encoders()?;
+    if !caps.h264_parser {
+        return Err("GStreamer h264parse is unavailable".into());
+    }
+    let encoder = caps.selected.ok_or("no usable H.264 encoder")?;
+    let decoder = decoder_candidates()
+        .iter()
+        .copied()
+        .find(|name| gst::ElementFactory::find(name).is_some())
+        .ok_or("no usable H.264 decoder")?;
+    run_pipeline(encoder, decoder, true, Some(request), false)
+}
+
+/// Same diagnostic with the producer-side restart explicitly enabled or
+/// disabled. The no-restart variant proves that the 250-frame GOP cannot
+/// recover the injected loss on its own.
 pub fn synthetic_sync_recovery_with_restart(
     enable_restart: bool,
 ) -> Result<SyncRecoveryReport, String> {
@@ -545,7 +598,7 @@ pub fn synthetic_sync_recovery_with_restart(
             continue;
         }
         for decoder in &decoders {
-            match run_pipeline(encoder, decoder, enable_restart) {
+            match run_pipeline(encoder, decoder, enable_restart, None, true) {
                 Ok(report) if report.verified => return Ok(report),
                 Ok(report) => failures.push(format!(
                     "{} -> {decoder}: not verified ({} decoded, {} discontinuities, recovered={}, {} latency samples)",
@@ -624,14 +677,16 @@ mod tests {
             .find(|name| gst::ElementFactory::find(name).is_some())
             .expect("no H.264 decoder");
 
-        let without_restart = run_pipeline(encoder, decoder, false).expect("no-restart pipeline");
+        let without_restart =
+            run_pipeline(encoder, decoder, false, None, true).expect("no-restart pipeline");
         assert!(!without_restart.restart_enabled);
         assert_eq!(without_restart.encoder_restarts, 0);
         assert!(!without_restart.recovered_after_injected_loss);
         assert!(!without_restart.verified);
         assert!(without_restart.decoded_frames < 12);
 
-        let with_restart = run_pipeline(encoder, decoder, true).expect("restart pipeline");
+        let with_restart =
+            run_pipeline(encoder, decoder, true, None, true).expect("restart pipeline");
         assert!(with_restart.restart_enabled);
         assert!(with_restart.encoder_restarts >= 1);
         assert!(with_restart.recovered_after_injected_loss);

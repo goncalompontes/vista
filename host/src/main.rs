@@ -325,6 +325,27 @@ fn run() -> Result<(), NiriError> {
                 println!("Arbitrary Niri window-ID capture remains unverified.");
             }
         }
+        [command] if command.as_str() == "keyframe-control-test" => {
+            eprintln!(
+                "Running an authenticated localhost control request -> encoder restart test; no capture, media transport or external network."
+            );
+            let report =
+                vista_host::keyframe_control::keyframe_control_probe().map_err(|error| {
+                    NiriError::Unavailable(format!("keyframe control test failed: {error}"))
+                })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Authenticated keyframe request verified={}: server requests={}, producer requests={}, encoder restarts={}, decoded frames={}.",
+                    report.verified,
+                    report.server_keyframe_requests,
+                    report.external_keyframe_requests,
+                    report.encoder_restarts,
+                    report.decoded_frames
+                );
+            }
+        }
         [command] if command.as_str() == "watch" => watch_windows(json)?,
         [command] if command.as_str() == "windows" => {
             let windows = niri.windows()?;

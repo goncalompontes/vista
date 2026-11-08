@@ -7,11 +7,14 @@ pub mod bridge;
 pub mod capture;
 pub mod catalog;
 pub mod decoder_sync;
+pub mod keyframe_control;
 pub mod live;
 pub mod media;
 pub mod portal;
+pub mod protocol;
 pub mod session;
 pub mod sync;
+pub mod transport;
 
 use serde::{Deserialize, Serialize};
 use std::env;
