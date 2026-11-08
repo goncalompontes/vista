@@ -1,19 +1,25 @@
-//! Two-process synthetic H.264 media stream over an encrypted TCP record.
+//! Two-process synthetic H.264 media stream over an authenticated encrypted TCP record.
 //!
-//! One process encodes a synthetic `videotestsrc` and sends each access unit
-//! as a ChaCha20-Poly1305 record; a second process decrypts and decodes the
-//! access units. This is a localhost transport diagnostic with a synthetic
-//! source. It does **not** capture desktop pixels, use the portal, or send
-//! media to iOS.
+//! The media connection first runs the versioned Vista control handshake with
+//! a 256-bit out-of-band pairing secret, opens a video-only session, and then
+//! derives the media record key from the authenticated session keys. The key is
+//! never printed or sent: the server's offer only carries the out-of-band
+//! pairing secret (test material) and the pairing id.
+//!
+//! This is a localhost transport diagnostic with a synthetic `videotestsrc`.
+//! It does not capture desktop pixels, use the portal, or send media to iOS.
 
 use crate::{
     media::{H264Encoder, decoder_candidates, probe_encoders},
+    protocol::{
+        ClientSession, Envelope, HostSession, HostState, MAX_CONTROL_FRAME_BYTES, PairingSecret,
+        PermissionSet, SessionKeys, unix_now,
+    },
     transport::{Direction, MAX_RECORD_BYTES, RecordCipher},
 };
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
-use ring::rand::{SecureRandom, SystemRandom};
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -32,8 +38,11 @@ const IO_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct MediaOffer {
     pub protocol: String,
     pub address: String,
-    pub key_hex: String,
-    pub session_id: String,
+    pub pairing_id: String,
+    /// Out-of-band test material. A real deployment uses a QR/code; this is
+    /// not the media key, which is derived from the authenticated session.
+    pub pairing_secret_hex: String,
+    pub expires_at: u64,
     pub frames: usize,
 }
 
@@ -62,21 +71,6 @@ pub struct ConsumerStats {
     pub verified: bool,
 }
 
-fn random_hex(bytes: usize) -> Result<String, String> {
-    let mut value = vec![0u8; bytes];
-    SystemRandom::new()
-        .fill(&mut value)
-        .map_err(|_| "secure randomness unavailable".to_string())?;
-    Ok(hex::encode(value))
-}
-
-fn key_bytes(hex_value: &str) -> Result<[u8; 32], String> {
-    let decoded = hex::decode(hex_value).map_err(|_| "key is not hex".to_string())?;
-    decoded
-        .try_into()
-        .map_err(|_| "key must be 32 bytes".to_string())
-}
-
 fn build(description: &str) -> Result<gst::Pipeline, String> {
     gst::parse::launch(description)
         .map_err(|error| format!("cannot construct pipeline: {error}"))?
@@ -103,6 +97,103 @@ fn decoder_description(decoder: &str) -> String {
          h264parse ! {decoder} ! videoconvert ! video/x-raw,format=RGBA ! \
          appsink name=decoded_sink sync=false max-buffers=2 drop=false"
     )
+}
+
+fn write_plain(stream: &mut TcpStream, envelope: &Envelope) -> Result<(), String> {
+    let bytes = envelope
+        .encode()
+        .map_err(|error| format!("control encode: {error}"))?;
+    stream
+        .write_all(&bytes)
+        .map_err(|error| format!("control write: {error}"))?;
+    stream
+        .flush()
+        .map_err(|error| format!("control flush: {error}"))
+}
+
+fn read_plain(stream: &mut TcpStream) -> Result<Envelope, String> {
+    let mut prefix = [0u8; 4];
+    stream
+        .read_exact(&mut prefix)
+        .map_err(|error| format!("control read: {error}"))?;
+    let length = u32::from_be_bytes(prefix) as usize;
+    if length == 0 || length > MAX_CONTROL_FRAME_BYTES {
+        return Err(format!("invalid control frame length: {length}"));
+    }
+    let mut body = vec![0u8; length];
+    stream
+        .read_exact(&mut body)
+        .map_err(|error| format!("control read: {error}"))?;
+    let mut framed = Vec::with_capacity(4 + length);
+    framed.extend_from_slice(&(length as u32).to_be_bytes());
+    framed.extend_from_slice(&body);
+    Envelope::decode(&framed).map_err(|error| format!("control decode: {error}"))
+}
+
+fn host_handshake(
+    stream: &mut TcpStream,
+    host: &mut HostSession,
+    now_secs: u64,
+) -> Result<(SessionKeys, String), String> {
+    for _ in 0..3 {
+        let envelope = read_plain(stream)?;
+        let response = host
+            .handle(&envelope, now_secs)
+            .map_err(|error| format!("control handshake: {error}"))?;
+        if let Some(response) = response {
+            write_plain(stream, &response)?;
+        }
+    }
+    if host.state() != HostState::Active {
+        return Err("control session did not become active".into());
+    }
+    let keys = host
+        .session_keys()
+        .ok_or("authenticated session keys are unavailable")?
+        .clone();
+    let session_id = host
+        .session_id()
+        .ok_or("authenticated session id is unavailable")?
+        .to_string();
+    Ok((keys, session_id))
+}
+
+fn client_handshake(
+    stream: &mut TcpStream,
+    secret: PairingSecret,
+) -> Result<(SessionKeys, String), String> {
+    let mut client = ClientSession::new(secret, "vista-media-client")
+        .map_err(|error| format!("control client: {error}"))?;
+    let hello = client
+        .hello()
+        .map_err(|error| format!("control hello: {error}"))?;
+    write_plain(stream, &hello)?;
+    let server_hello = read_plain(stream)?;
+    let proof = client
+        .accept_server_hello(&server_hello)
+        .map_err(|error| format!("control handshake: {error}"))?;
+    write_plain(stream, &proof)?;
+    let accepted = read_plain(stream)?;
+    client
+        .accept_pairing(&accepted)
+        .map_err(|error| format!("pairing rejected: {error}"))?;
+    let open = client
+        .open_session(PermissionSet::video_only())
+        .map_err(|error| format!("session open: {error}"))?;
+    write_plain(stream, &open)?;
+    let opened = read_plain(stream)?;
+    client
+        .accept_session_opened(&opened)
+        .map_err(|error| format!("session open rejected: {error}"))?;
+    let keys = client
+        .session_keys()
+        .ok_or("authenticated session keys are unavailable")?
+        .clone();
+    let session_id = client
+        .session_id()
+        .ok_or("authenticated session id is unavailable")?
+        .to_string();
+    Ok((keys, session_id))
 }
 
 fn write_record(
@@ -309,9 +400,8 @@ pub fn receive_frames(
                 return Err("media record is too short".into());
             }
             let pts = u64::from_be_bytes(plaintext[..8].try_into().expect("eight bytes"));
-            let data = &plaintext[9..];
             received.insert(pts, Instant::now());
-            let mut buffer = gst::Buffer::from_mut_slice(data.to_vec());
+            let mut buffer = gst::Buffer::from_mut_slice(plaintext[9..].to_vec());
             if let Some(writable) = buffer.get_mut() {
                 writable.set_pts(gst::ClockTime::from_nseconds(pts));
                 writable.set_duration(gst::ClockTime::from_nseconds(1_000_000_000 / 30));
@@ -390,8 +480,8 @@ pub fn receive_frames(
 
 pub struct MediaServer {
     listener: TcpListener,
-    key: [u8; 32],
-    session_id: String,
+    host: HostSession,
+    now_secs: u64,
     frames: usize,
 }
 
@@ -402,21 +492,30 @@ impl MediaServer {
         let address = listener
             .local_addr()
             .map_err(|error| format!("cannot read media address: {error}"))?;
-        let key_hex = random_hex(32)?;
-        let key = key_bytes(&key_hex)?;
-        let session_id = random_hex(16)?;
+        let secret =
+            PairingSecret::generate().map_err(|error| format!("pairing secret: {error}"))?;
+        let now_secs = unix_now();
+        let host = HostSession::new(
+            "vista-media-host",
+            "Vista media host",
+            secret.clone(),
+            PermissionSet::video_only(),
+            now_secs,
+        )
+        .map_err(|error| format!("control host: {error}"))?;
         let offer = MediaOffer {
-            protocol: "media-test/1".into(),
+            protocol: "media-auth/1".into(),
             address: address.to_string(),
-            key_hex,
-            session_id: session_id.clone(),
+            pairing_id: host.pairing_id().to_string(),
+            pairing_secret_hex: secret.to_hex(),
+            expires_at: host.expires_at(),
             frames,
         };
         Ok((
             Self {
                 listener,
-                key,
-                session_id,
+                host,
+                now_secs,
                 frames,
             },
             offer,
@@ -429,21 +528,25 @@ impl MediaServer {
             .accept()
             .map_err(|error| format!("media accept failed: {error}"))?;
         stream
+            .set_read_timeout(Some(IO_TIMEOUT))
+            .map_err(|error| format!("cannot set media timeout: {error}"))?;
+        stream
             .set_write_timeout(Some(IO_TIMEOUT))
             .map_err(|error| format!("cannot set media timeout: {error}"))?;
-        send_frames(&mut stream, &self.key, &self.session_id, self.frames)
+        let mut host = self.host;
+        let (keys, session_id) = host_handshake(&mut stream, &mut host, self.now_secs)?;
+        send_frames(&mut stream, keys.host_to_client(), &session_id, self.frames)
     }
 }
 
-pub fn connect(
-    address: SocketAddr,
-    key_hex: &str,
-    session_id: &str,
-) -> Result<ConsumerStats, String> {
-    let key = key_bytes(key_hex)?;
+pub fn connect(address: SocketAddr, secret_hex: &str) -> Result<ConsumerStats, String> {
+    let secret = PairingSecret::from_hex(secret_hex)
+        .map_err(|error| format!("invalid pairing secret: {error}"))?;
     let stream = TcpStream::connect_timeout(&address, IO_TIMEOUT)
         .map_err(|error| format!("media connect failed: {error}"))?;
-    receive_frames(stream, &key, session_id)
+    let mut client_stream = stream;
+    let (keys, session_id) = client_handshake(&mut client_stream, secret)?;
+    receive_frames(client_stream, keys.host_to_client(), &session_id)
 }
 
 #[cfg(test)]
@@ -451,27 +554,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn key_material_is_bounded() {
-        assert!(key_bytes(&"00".repeat(32)).is_ok());
-        assert!(key_bytes("00").is_err());
-        assert!(key_bytes(&"zz".repeat(32)).is_err());
+    fn pairing_secret_must_be_256_bits_of_hex() {
+        assert!(PairingSecret::from_hex(&"00".repeat(32)).is_ok());
+        assert!(PairingSecret::from_hex("00").is_err());
+        assert!(PairingSecret::from_hex(&"zz".repeat(32)).is_err());
     }
 
     #[test]
     #[ignore = "requires H.264 GStreamer plugins and localhost networking"]
-    fn two_process_style_media_stream_decodes() {
+    fn authenticated_media_stream_decodes() {
         let (server, offer) =
             MediaServer::bind("127.0.0.1:0".parse().expect("loopback"), 12).unwrap();
         let handle = std::thread::spawn(move || server.accept_and_send());
-        let consumer = connect(
-            offer.address.parse().unwrap(),
-            &offer.key_hex,
-            &offer.session_id,
-        )
-        .unwrap();
+        let consumer = connect(offer.address.parse().unwrap(), &offer.pairing_secret_hex).unwrap();
         let producer = handle.join().unwrap().unwrap();
         assert!(producer.frames_sent > 0);
         assert!(consumer.verified);
         assert!(consumer.decoded_frames > 0);
+    }
+
+    #[test]
+    #[ignore = "requires localhost networking and control protocol"]
+    fn wrong_pairing_secret_is_rejected() {
+        let (server, offer) =
+            MediaServer::bind("127.0.0.1:0".parse().expect("loopback"), 12).unwrap();
+        let handle = std::thread::spawn(move || server.accept_and_send());
+        let wrong = "11".repeat(32);
+        let client = connect(offer.address.parse().unwrap(), &wrong);
+        assert!(client.is_err());
+        assert!(handle.join().unwrap().is_err());
     }
 }
