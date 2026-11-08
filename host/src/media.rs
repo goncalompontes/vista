@@ -107,7 +107,7 @@ pub struct H264RoundTripReport {
 
 const CODEC_WAIT: Duration = Duration::from_secs(8);
 
-fn decoder_candidates() -> &'static [&'static str] {
+pub(crate) fn decoder_candidates() -> &'static [&'static str] {
     &["nvh264dec", "avdec_h264", "openh264dec"]
 }
 

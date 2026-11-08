@@ -97,6 +97,7 @@ pub struct H264SyncGate {
     awaiting_idr: bool,
     observed_generation: Option<u64>,
     pending_reset: Option<H264Discontinuity>,
+    discarded_access_units: u64,
 }
 
 impl Default for H264SyncGate {
@@ -111,6 +112,7 @@ impl H264SyncGate {
             awaiting_idr: true,
             observed_generation: None,
             pending_reset: None,
+            discarded_access_units: 0,
         }
     }
 
@@ -122,6 +124,11 @@ impl H264SyncGate {
 
     pub fn awaiting_idr(&self) -> bool {
         self.awaiting_idr
+    }
+
+    /// Access units dropped because recovery was still in progress.
+    pub fn discarded_access_units(&self) -> u64 {
+        self.discarded_access_units
     }
 
     /// Poll one event. Startup/overflow/resize/pipeline/decoder reset produces
@@ -158,6 +165,7 @@ impl H264SyncGate {
             };
             if self.awaiting_idr {
                 if !summary.recovery_point {
+                    self.discarded_access_units += 1;
                     continue;
                 }
                 self.awaiting_idr = false;
@@ -219,6 +227,7 @@ mod tests {
             s.enqueue_h264(t, unit(nals)).unwrap();
             assert_eq!(poll(&mut gate, &mut s, t), None);
         }
+        assert_eq!(gate.discarded_access_units(), 4);
         let recovery = unit(&[9, 7, 8, 5]);
         s.enqueue_h264(t, recovery.clone()).unwrap();
         assert_eq!(

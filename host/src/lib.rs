@@ -11,6 +11,7 @@ pub mod live;
 pub mod media;
 pub mod portal;
 pub mod session;
+pub mod sync;
 
 use serde::{Deserialize, Serialize};
 use std::env;

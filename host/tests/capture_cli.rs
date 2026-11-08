@@ -31,6 +31,17 @@ fn bridge_test_rejects_unexpected_arguments() {
 }
 
 #[test]
+fn sync_test_rejects_unexpected_arguments() {
+    let output = Command::new(env!("CARGO_BIN_EXE_vista-host"))
+        .args(["sync-test", "--confirm"])
+        .output()
+        .expect("launch host binary");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown command"));
+}
+
+#[test]
 fn codec_test_rejects_unexpected_arguments() {
     let output = Command::new(env!("CARGO_BIN_EXE_vista-host"))
         .args(["codec-test", "--confirm"])

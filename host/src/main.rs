@@ -17,6 +17,7 @@ fn usage() {
     eprintln!("       vista-host encoders [--json]");
     eprintln!("       vista-host codec-test [--json]");
     eprintln!("       vista-host bridge-test [--json]");
+    eprintln!("       vista-host sync-test [--json]");
     eprintln!("       vista-host capture-h264 --confirm [--json]");
 }
 
@@ -260,6 +261,35 @@ fn run() -> Result<(), NiriError> {
                     report.encoded_bytes,
                     report.dropped_frames,
                     report.elapsed_ms
+                );
+            }
+        }
+        [command] if command.as_str() == "sync-test" => {
+            eprintln!(
+                "Running bounded synthetic RGBA -> session -> H.264 -> sync gate -> decode with one injected loss; no desktop capture or network access."
+            );
+            let report =
+                vista_host::sync::synthetic_sync_recovery().map_err(NiriError::Unavailable)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Sync recovery verified: {:?} -> {}, {} encoded buffers, {} decoded frames ({} with PTS), {} discontinuities, {} suppressed units, in {} ms.",
+                    report.encoder,
+                    report.decoder,
+                    report.encoded_buffers,
+                    report.decoded_frames,
+                    report.decoded_with_pts,
+                    report.discontinuities,
+                    report.discarded_access_units,
+                    report.elapsed_ms
+                );
+                println!(
+                    "In-memory traversal latency: min {:.2} ms, median {:.2} ms, max {:.2} ms over {} samples (not capture or network latency).",
+                    report.latency.min_ms,
+                    report.latency.median_ms,
+                    report.latency.max_ms,
+                    report.latency.samples
                 );
             }
         }
