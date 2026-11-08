@@ -29,6 +29,11 @@ fn usage() {
     eprintln!(
         "       vista-host protocol-serve --confirm [--listen ADDR] [--secret-hex HEX] [--allow-remote] [--json]"
     );
+    eprintln!("       vista-host keyframe-control-test [--json]");
+    eprintln!("       vista-host media-stream --serve [--listen ADDR] [--frames N] [--json]");
+    eprintln!(
+        "       vista-host media-stream --connect ADDR --key-hex HEX --session-id ID [--json]"
+    );
     eprintln!("       vista-host protocol-client --connect ADDR --secret-hex HEX [--json]");
 }
 
@@ -389,6 +394,31 @@ fn run() -> Result<(), NiriError> {
                 );
             }
         }
+        [command] if command.as_str() == "keyframe-control-test" => {
+            eprintln!(
+                "Running an authenticated localhost control request -> encoder restart test; no capture, media transport or external network."
+            );
+            let report =
+                vista_host::keyframe_control::keyframe_control_probe().map_err(|error| {
+                    NiriError::Unavailable(format!("keyframe control test failed: {error}"))
+                })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Authenticated keyframe request verified={}: server requests={}, producer requests={}, encoder restarts={}, decoded frames={}.",
+                    report.verified,
+                    report.server_keyframe_requests,
+                    report.external_keyframe_requests,
+                    report.encoder_restarts,
+                    report.decoded_frames
+                );
+            }
+        }
+        [command, rest @ ..] if command.as_str() == "media-stream" => {
+            let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
+            media_stream_command(&rest, json)?;
+        }
         [command] if command.as_str() == "watch" => watch_windows(json)?,
         [command] if command.as_str() == "windows" => {
             let windows = niri.windows()?;
@@ -683,6 +713,88 @@ fn protocol_client(args: &[&str], json: bool) -> Result<(), NiriError> {
             stats.handshake_frames,
             stats.encrypted_writes,
             stats.encrypted_reads
+        );
+    }
+    Ok(())
+}
+
+fn media_stream_command(args: &[&str], json: bool) -> Result<(), NiriError> {
+    let serve = args.contains(&"--serve");
+    let connect = option(args, "--connect");
+    if serve && connect.is_some() {
+        return Err(NiriError::InvalidArgument(
+            "media-stream accepts either --serve or --connect, not both".into(),
+        ));
+    }
+    if serve {
+        check_known_arguments(args, &["--listen", "--frames"], &["--serve"])?;
+        let listen = option(args, "--listen").unwrap_or("127.0.0.1:0");
+        let address: SocketAddr = listen.parse().map_err(|_| {
+            NiriError::InvalidArgument("--listen must be an IP:port address".into())
+        })?;
+        let frames = match option(args, "--frames") {
+            Some(value) => value.parse::<usize>().map_err(|_| {
+                NiriError::InvalidArgument("--frames must be a positive integer".into())
+            })?,
+            None => vista_host::media_stream::DEFAULT_FRAMES,
+        };
+        if frames == 0 {
+            return Err(NiriError::InvalidArgument(
+                "--frames must be greater than zero".into(),
+            ));
+        }
+        let (server, offer) = vista_host::media_stream::MediaServer::bind(address, frames)
+            .map_err(|error| NiriError::Unavailable(format!("media server: {error}")))?;
+        if json {
+            println!("{}", serde_json::to_string(&offer)?);
+            io::stdout().flush()?;
+        } else {
+            println!(
+                "Media stream listening on {} ({} frames, session {}).",
+                offer.address, offer.frames, offer.session_id
+            );
+            println!("Key (test transport): {}", offer.key_hex);
+            io::stdout().flush()?;
+        }
+        let stats = server
+            .accept_and_send()
+            .map_err(|error| NiriError::Unavailable(format!("media send: {error}")))?;
+        if json {
+            println!("{}", serde_json::to_string(&stats)?);
+        } else {
+            println!(
+                "Sent {} encrypted media records / {} bytes in {} ms.",
+                stats.frames_sent, stats.bytes_sent, stats.elapsed_ms
+            );
+        }
+        return Ok(());
+    }
+    let Some(connect) = connect else {
+        usage();
+        return Err(NiriError::InvalidArgument(
+            "media-stream requires --serve or --connect".into(),
+        ));
+    };
+    check_known_arguments(args, &["--connect", "--key-hex", "--session-id"], &[])?;
+    let address: SocketAddr = connect
+        .parse()
+        .map_err(|_| NiriError::InvalidArgument("--connect must be an IP:port address".into()))?;
+    let key = option(args, "--key-hex")
+        .ok_or_else(|| NiriError::InvalidArgument("media-stream requires --key-hex".into()))?;
+    let session = option(args, "--session-id")
+        .ok_or_else(|| NiriError::InvalidArgument("media-stream requires --session-id".into()))?;
+    let stats = vista_host::media_stream::connect(address, key, session)
+        .map_err(|error| NiriError::Unavailable(format!("media receive: {error}")))?;
+    if json {
+        println!("{}", serde_json::to_string(&stats)?);
+    } else {
+        println!(
+            "Received and decoded {} encrypted media records into {} frames ({} bytes) in {} ms; latency samples={}.",
+            stats.frames_received,
+            stats.decoded_frames,
+            stats.decoded_bytes,
+            stats.elapsed_ms,
+            stats.latency.samples
         );
     }
     Ok(())
