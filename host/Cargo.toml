@@ -7,8 +7,15 @@ description = "Native Linux host for Vista remote applications"
 [dependencies]
 hex = "0.4"
 ring = "0.17"
+zeroize = "1.8"
+ashpd = { version = "0.13.13", default-features = false, features = ["screencast", "tokio"] }
+enumflags2 = "0.7"
+gstreamer = "0.24"
+gstreamer-app = "0.24"
+gstreamer-video = "0.24"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-zeroize = "1.8"
+tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread", "time"] }
+futures-util = "0.3"
 
 [dev-dependencies]

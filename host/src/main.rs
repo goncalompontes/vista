@@ -11,9 +11,16 @@ struct HostCapabilities {
 }
 
 fn usage() {
-    eprintln!(
-        "Usage: vista-host <doctor|capabilities|windows|window ID|watch|protocol-test> [--json]"
-    );
+    eprintln!("Usage: vista-host <doctor|capabilities|windows|window ID|watch> [--json]");
+    eprintln!("       vista-host capture-consent --confirm [--json]");
+    eprintln!("       vista-host capture-frame --confirm [--json]");
+    eprintln!("       vista-host capture-burst --confirm [--json]");
+    eprintln!("       vista-host capture-monitor --confirm [--json]");
+    eprintln!("       vista-host encoders [--json]");
+    eprintln!("       vista-host codec-test [--json]");
+    eprintln!("       vista-host bridge-test [--json]");
+    eprintln!("       vista-host sync-test [--json]");
+    eprintln!("       vista-host capture-h264 --confirm [--json]");
     eprintln!("       vista-host protocol-test [--json]");
     eprintln!("       vista-host protocol-loopback [--json]");
     eprintln!(
@@ -89,71 +96,244 @@ fn run() -> Result<(), NiriError> {
                 );
             }
         }
-        [command] if command.as_str() == "protocol-loopback" => {
+        [command, confirm]
+            if command.as_str() == "capture-consent" && confirm.as_str() == "--confirm" =>
+        {
             eprintln!(
-                "Running a localhost-only AEAD control-channel loopback; no external listener is opened."
+                "Vista will ask the desktop portal to select one window. No frames are read or transmitted; the portal session is not persisted."
             );
-            let report = vista_host::transport::protocol_loopback().map_err(|err| {
-                NiriError::Unavailable(format!("transport loopback failed: {err}"))
-            })?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let report = runtime
+                .block_on(vista_host::capture::consent_probe())
+                .map_err(|err| {
+                    NiriError::Unavailable(format!(
+                        "ScreenCast consent probe failed or was cancelled: {err}"
+                    ))
+                })?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!(
-                    "Encrypted loopback verified={}: {} handshake frames, {} server records, {} client writes/{} reads, keyframe requests={} at {}.",
-                    report.verified,
-                    report.handshake_frames,
-                    report.server_encrypted_records,
-                    report.client_encrypted_writes,
-                    report.client_encrypted_reads,
-                    report.keyframe_requests,
-                    report.address
+                    "Portal session negotiated {} stream(s)",
+                    report.streams.len()
                 );
-                println!(
-                    "Protocol {}; ChaCha20-Poly1305 records with implicit nonce counters and session/direction AAD; no external listener.",
-                    report.protocol
-                );
+                for stream in report.streams {
+                    println!(
+                        "PipeWire node {} (size: {:?}, position: {:?})",
+                        stream.pipewire_node_id, stream.size, stream.position
+                    );
+                }
+                println!("No pixels captured; arbitrary Niri window capture remains unverified.");
             }
         }
-        [command] if command.as_str() == "protocol-test" => {
+        [command, confirm]
+            if command.as_str() == "capture-frame" && confirm.as_str() == "--confirm" =>
+        {
             eprintln!(
-                "Running the in-memory protocol pairing/session diagnostic; no network, media or input access."
+                "Vista will request permission to read exactly one selected window frame. Pixels remain in memory and are not saved or transmitted; the session is not persisted."
             );
-            let report = vista_host::protocol::diagnostic().map_err(|error| {
-                NiriError::Unavailable(format!("protocol diagnostic failed: {error}"))
-            })?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let report = runtime
+                .block_on(vista_host::capture::first_frame_probe())
+                .map_err(|err| {
+                    NiriError::Unavailable(format!(
+                        "ScreenCast frame probe failed or was cancelled: {err}"
+                    ))
+                })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else if let Some(frame) = report.frame {
+                println!(
+                    "Received PipeWire video frame from node {}: {:?}x{:?}, {} bytes, {} ms; no pixels saved or transmitted.",
+                    frame.pipewire_node_id,
+                    frame.width,
+                    frame.height,
+                    frame.bytes,
+                    frame.elapsed_ms
+                );
+                println!("Arbitrary Niri window-ID capture remains unverified.");
+            }
+        }
+        [command, confirm]
+            if command.as_str() == "capture-burst" && confirm.as_str() == "--confirm" =>
+        {
+            eprintln!(
+                "Vista will request one window and inspect up to eight transient frames. No pixels are saved or transmitted; permissions are not persisted."
+            );
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let report = runtime
+                .block_on(vista_host::capture::frame_burst_probe())
+                .map_err(|err| {
+                    NiriError::Unavailable(format!(
+                        "ScreenCast frame burst failed or was cancelled: {err}"
+                    ))
+                })?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!(
-                    "Protocol {} handshake verified: host={}, client={}, {} control frames / {} bytes, keys match={}, permissions video={} input={} clipboard={}.",
-                    report.protocol,
-                    report.host_state,
-                    report.client_state,
-                    report.client_frames + report.host_frames,
-                    report.wire_bytes,
-                    report.keys_match,
-                    report.permissions.video,
-                    report.permissions.input,
-                    report.permissions.clipboard
+                    "Received {} transient window frames in {} ms ({} resize event(s)); no pixels saved or transmitted.",
+                    report.frames.len(),
+                    report.elapsed_ms,
+                    report.resize_events
+                );
+                println!("Arbitrary Niri window-ID capture remains unverified.");
+            }
+        }
+        [command, confirm]
+            if command.as_str() == "capture-monitor" && confirm.as_str() == "--confirm" =>
+        {
+            eprintln!(
+                "Vista will request one window and monitor transient frames for at most 3 seconds or 120 frames. No pixels are saved or transmitted; permissions are not persisted."
+            );
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let report = runtime
+                .block_on(vista_host::capture::capture_monitor_probe())
+                .map_err(|err| {
+                    NiriError::Unavailable(format!(
+                        "ScreenCast monitor failed or was cancelled: {err}"
+                    ))
+                })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Observed {} transient window frames in {} ms ({} resize events; termination: {:?}); no pixels saved or transmitted.",
+                    report.frames, report.elapsed_ms, report.resize_events, report.termination
+                );
+                println!("Arbitrary Niri window-ID capture remains unverified.");
+            }
+        }
+        [command] if command.as_str() == "encoders" => {
+            let report = vista_host::media::probe_encoders().map_err(NiriError::Unavailable)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "H.264 encoder factories: NVENC={} x264={} OpenH264={}",
+                    report.nvidia, report.x264, report.openh264
                 );
                 println!(
-                    "Negative checks: wrong secret={}, replay={}, expired offer={}, permission escalation={}, version mismatch={}.",
-                    report.wrong_secret_rejected,
-                    report.replayed_proof_rejected,
-                    report.expired_offer_rejected,
-                    report.permission_escalation_rejected,
-                    report.version_mismatch_rejected
+                    "H.264 parser={} decoder factory={}",
+                    report.h264_parser, report.decoder_available
+                );
+                println!(
+                    "Preferred encoder: {:?} (availability only; encoding not verified)",
+                    report.selected
                 );
             }
         }
-        [command, rest @ ..] if command.as_str() == "protocol-serve" => {
-            let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
-            protocol_serve(&rest, json)?;
+        [command] if command.as_str() == "codec-test" => {
+            eprintln!(
+                "Running a bounded synthetic H.264 encode/decode test; no screen capture or network access."
+            );
+            let report =
+                vista_host::media::synthetic_h264_round_trip().map_err(NiriError::Unavailable)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "H.264 round-trip verified with {:?} -> {}: {} compressed bytes, {} decoded bytes at {}x{} in {} ms.",
+                    report.encoder,
+                    report.decoder,
+                    report.encoded_bytes,
+                    report.decoded_bytes,
+                    report.width,
+                    report.height,
+                    report.elapsed_ms
+                );
+            }
         }
-        [command, rest @ ..] if command.as_str() == "protocol-client" => {
-            let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
-            protocol_client(&rest, json)?;
+        [command] if command.as_str() == "bridge-test" => {
+            eprintln!(
+                "Running bounded synthetic RGBA -> session -> H.264 encoding; no desktop capture or network access."
+            );
+            let report =
+                vista_host::bridge::synthetic_frame_bridge().map_err(NiriError::Unavailable)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Synthetic bridge verified: {:?}, {} input frames, {} encoded buffers, {} compressed bytes, {} dropped frames in {} ms.",
+                    report.encoder,
+                    report.input_frames,
+                    report.encoded_buffers,
+                    report.encoded_bytes,
+                    report.dropped_frames,
+                    report.elapsed_ms
+                );
+            }
+        }
+        [command] if command.as_str() == "sync-test" => {
+            eprintln!(
+                "Running bounded synthetic RGBA -> session -> H.264 -> sync gate -> decode with one injected loss; no desktop capture or network access."
+            );
+            let report =
+                vista_host::sync::synthetic_sync_recovery().map_err(NiriError::Unavailable)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Sync recovery verified: {:?} -> {}, {} encoded buffers, {} decoded frames ({} with PTS), {} discontinuities, {} suppressed units, {} AEAD records / {} bytes, {} TCP media records / {} bytes, in {} ms.",
+                    report.encoder,
+                    report.decoder,
+                    report.encoded_buffers,
+                    report.decoded_frames,
+                    report.decoded_with_pts,
+                    report.discontinuities,
+                    report.discarded_access_units,
+                    report.aead_records,
+                    report.aead_bytes,
+                    report.tcp_records,
+                    report.tcp_bytes,
+                    report.elapsed_ms
+                );
+                println!(
+                    "In-memory traversal latency: min {:.2} ms, median {:.2} ms, max {:.2} ms over {} samples (not capture or network latency).",
+                    report.latency.min_ms,
+                    report.latency.median_ms,
+                    report.latency.max_ms,
+                    report.latency.samples
+                );
+            }
+        }
+        [command, confirm]
+            if command.as_str() == "capture-h264" && confirm.as_str() == "--confirm" =>
+        {
+            eprintln!(
+                "Vista will request one window and briefly encode its frames in memory. No video is saved or transmitted; permissions are not persisted."
+            );
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let report = runtime
+                .block_on(vista_host::live::capture_h264_probe())
+                .map_err(|err| {
+                    NiriError::Unavailable(format!(
+                        "ScreenCast H.264 diagnostic failed or was cancelled: {err}"
+                    ))
+                })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Encoded {} selected-window frames into {} H.264 buffers ({} bytes) in {} ms with {:?}; no pixels were saved or transmitted.",
+                    report.input_frames,
+                    report.encoded_buffers,
+                    report.encoded_bytes,
+                    report.elapsed_ms,
+                    report.encoder
+                );
+                println!("Arbitrary Niri window-ID capture remains unverified.");
+            }
         }
         [command] if command.as_str() == "watch" => watch_windows(json)?,
         [command] if command.as_str() == "windows" => {
@@ -227,41 +407,43 @@ fn run() -> Result<(), NiriError> {
         }
         [command] if command.as_str() == "protocol-test" => {
             eprintln!(
-                "Running an in-memory control-plane pairing and session test; no network, capture or input access."
+                "Running the in-memory protocol pairing/session diagnostic; no network, media or input access."
             );
-            let report = protocol::diagnostic()
-                .map_err(|err| NiriError::Unavailable(format!("protocol test failed: {err}")))?;
+            let report = vista_host::protocol::diagnostic().map_err(|error| {
+                NiriError::Unavailable(format!("protocol diagnostic failed: {error}"))
+            })?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!(
-                    "Control protocol {}: host={} client={}, {} client frames / {} host frames / {} bytes; keys match={}, fingerprint={}.",
+                    "Protocol {} handshake verified: host={}, client={}, {} control frames / {} bytes, keys match={}, permissions video={} input={} clipboard={}.",
                     report.protocol,
                     report.host_state,
                     report.client_state,
-                    report.client_frames,
-                    report.host_frames,
+                    report.client_frames + report.host_frames,
                     report.wire_bytes,
                     report.keys_match,
-                    report.key_fingerprint
-                );
-                println!(
-                    "Permissions: video={} audio={} input={} clipboard={}.",
                     report.permissions.video,
-                    report.permissions.audio,
                     report.permissions.input,
                     report.permissions.clipboard
                 );
                 println!(
-                    "Negative checks: wrong-secret={} replay={} expired={} permission-escalation={} version-mismatch={}; verified={}.",
+                    "Negative checks: wrong secret={}, replay={}, expired offer={}, permission escalation={}, version mismatch={}.",
                     report.wrong_secret_rejected,
                     report.replayed_proof_rejected,
                     report.expired_offer_rejected,
                     report.permission_escalation_rejected,
-                    report.version_mismatch_rejected,
-                    report.verified
+                    report.version_mismatch_rejected
                 );
             }
+        }
+        [command, rest @ ..] if command.as_str() == "protocol-serve" => {
+            let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
+            protocol_serve(&rest, json)?;
+        }
+        [command, rest @ ..] if command.as_str() == "protocol-client" => {
+            let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
+            protocol_client(&rest, json)?;
         }
         _ => {
             usage();
