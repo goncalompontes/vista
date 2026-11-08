@@ -61,6 +61,7 @@ fn media_stream_serves_and_decodes_across_processes() {
     assert_eq!(report["verified"], true, "{report}");
     assert!(report["frames_received"].as_u64().unwrap() > 0);
     assert!(report["decoded_frames"].as_u64().unwrap() > 0);
+    assert_eq!(report["keyframe_requests_sent"], 1, "{report}");
 
     let status = server.wait().expect("wait for media server");
     assert!(status.success(), "server failed");
