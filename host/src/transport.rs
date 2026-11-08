@@ -388,9 +388,10 @@ where
             Err(error) => return Err(error),
         };
         stats.encrypted_records += 1;
+        let keyframe_requests_before = host.keyframe_requests();
         let response = host.handle(&envelope, now_secs)?;
         if matches!(&envelope.body, ControlMessage::KeyframeRequest { .. })
-            && host.state() == HostState::Active
+            && host.keyframe_requests() > keyframe_requests_before
         {
             hook();
         }

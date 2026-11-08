@@ -38,9 +38,7 @@ fn usage() {
     );
     eprintln!("       vista-host keyframe-control-test [--json]");
     eprintln!("       vista-host media-stream --serve [--listen ADDR] [--frames N] [--json]");
-    eprintln!(
-        "       vista-host media-stream --connect ADDR --key-hex HEX --session-id ID [--json]"
-    );
+    eprintln!("       vista-host media-stream --connect ADDR --secret-hex HEX [--json]");
     eprintln!("       vista-host protocol-client --connect ADDR --secret-hex HEX [--json]");
 }
 
@@ -825,10 +823,15 @@ fn media_stream_command(args: &[&str], json: bool) -> Result<(), NiriError> {
             io::stdout().flush()?;
         } else {
             println!(
-                "Media stream listening on {} ({} frames, session {}).",
-                offer.address, offer.frames, offer.session_id
+                "Media stream listening on {} ({} frames, pairing id {}).",
+                offer.address, offer.frames, offer.pairing_id
             );
-            println!("Key (test transport): {}", offer.key_hex);
+            println!("Pairing id: {}", offer.pairing_id);
+            println!(
+                "Out-of-band pairing secret (test): {}",
+                offer.pairing_secret_hex
+            );
+            println!("Offer expires at: {}", offer.expires_at);
             io::stdout().flush()?;
         }
         let stats = server
@@ -838,8 +841,12 @@ fn media_stream_command(args: &[&str], json: bool) -> Result<(), NiriError> {
             println!("{}", serde_json::to_string(&stats)?);
         } else {
             println!(
-                "Sent {} encrypted media records / {} bytes in {} ms.",
-                stats.frames_sent, stats.bytes_sent, stats.elapsed_ms
+                "Sent {} encrypted media records / {} bytes in {} ms; keyframe requests={}, encoder restarts={}.",
+                stats.frames_sent,
+                stats.bytes_sent,
+                stats.elapsed_ms,
+                stats.keyframe_requests,
+                stats.encoder_restarts
             );
         }
         return Ok(());
@@ -850,25 +857,24 @@ fn media_stream_command(args: &[&str], json: bool) -> Result<(), NiriError> {
             "media-stream requires --serve or --connect".into(),
         ));
     };
-    check_known_arguments(args, &["--connect", "--key-hex", "--session-id"], &[])?;
+    check_known_arguments(args, &["--connect", "--secret-hex"], &[])?;
     let address: SocketAddr = connect
         .parse()
         .map_err(|_| NiriError::InvalidArgument("--connect must be an IP:port address".into()))?;
-    let key = option(args, "--key-hex")
-        .ok_or_else(|| NiriError::InvalidArgument("media-stream requires --key-hex".into()))?;
-    let session = option(args, "--session-id")
-        .ok_or_else(|| NiriError::InvalidArgument("media-stream requires --session-id".into()))?;
-    let stats = vista_host::media_stream::connect(address, key, session)
+    let secret = option(args, "--secret-hex")
+        .ok_or_else(|| NiriError::InvalidArgument("media-stream requires --secret-hex".into()))?;
+    let stats = vista_host::media_stream::connect(address, secret)
         .map_err(|error| NiriError::Unavailable(format!("media receive: {error}")))?;
     if json {
         println!("{}", serde_json::to_string(&stats)?);
     } else {
         println!(
-            "Received and decoded {} encrypted media records into {} frames ({} bytes) in {} ms; latency samples={}.",
+            "Received and decoded {} encrypted media records into {} frames ({} bytes) in {} ms; keyframe requests sent={}, latency samples={}.",
             stats.frames_received,
             stats.decoded_frames,
             stats.decoded_bytes,
             stats.elapsed_ms,
+            stats.keyframe_requests_sent,
             stats.latency.samples
         );
     }

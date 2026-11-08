@@ -37,18 +37,17 @@ fn media_stream_serves_and_decodes_across_processes() {
         .expect("media offer content");
     let offer: serde_json::Value = serde_json::from_str(&offer_line).expect("offer JSON");
     let address = offer["address"].as_str().expect("offer address");
-    let key = offer["key_hex"].as_str().expect("offer key");
-    let session = offer["session_id"].as_str().expect("offer session");
+    let secret = offer["pairing_secret_hex"]
+        .as_str()
+        .expect("offer pairing secret");
 
     let output = Command::new(env!("CARGO_BIN_EXE_vista-host"))
         .args([
             "media-stream",
             "--connect",
             address,
-            "--key-hex",
-            key,
-            "--session-id",
-            session,
+            "--secret-hex",
+            secret,
             "--json",
         ])
         .output()
@@ -62,6 +61,7 @@ fn media_stream_serves_and_decodes_across_processes() {
     assert_eq!(report["verified"], true, "{report}");
     assert!(report["frames_received"].as_u64().unwrap() > 0);
     assert!(report["decoded_frames"].as_u64().unwrap() > 0);
+    assert_eq!(report["keyframe_requests_sent"], 1, "{report}");
 
     let status = server.wait().expect("wait for media server");
     assert!(status.success(), "server failed");
