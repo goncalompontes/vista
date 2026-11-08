@@ -4,14 +4,19 @@
 //! Capture and input are deliberately kept separate from compositor discovery.
 
 pub mod bridge;
+pub mod capability;
 pub mod capture;
 pub mod catalog;
 pub mod decoder_sync;
 pub mod live;
 pub mod media;
+pub mod output_capture;
+pub mod pipewire_loopback;
 pub mod portal;
+pub mod protocol;
 pub mod session;
 pub mod sync;
+pub mod transport;
 
 use serde::{Deserialize, Serialize};
 use std::env;

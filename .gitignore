@@ -6,3 +6,6 @@
 /client/core/.swiftpm/
 /client/ios/*.xcodeproj/
 /client/ios/DerivedData/
+/client/ios/.build/
+/client/ios/.swiftpm/
+/client/ios/xtool/
