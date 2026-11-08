@@ -488,7 +488,8 @@ impl ActionContext {
         Ok(())
     }
 
-    fn allows(&self, action: &str) -> bool {
+    /// Whether the current grant snapshot permits the action's scope.
+    pub fn allows_action(&self, action: &str) -> bool {
         match action.split('.').next().unwrap_or_default() {
             "desktop" | "application" | "session" => self.grants.desktop_actions,
             "clipboard" => self.grants.clipboard,
@@ -617,13 +618,23 @@ impl<B: ActionBackend> ActionRegistry<B> {
 
     pub fn snapshot(&self, context: &ActionContext) -> Result<CapabilitySnapshot, ContractError> {
         context.validate()?;
+        // A backend advertises semantics; the snapshot reflects the *actual*
+        // grant state. An action whose scope is not granted is presented as
+        // `required`, never silently as allowed.
+        let mut actions = self.backend.descriptors();
+        for action in &mut actions {
+            if action.authorization == Authorization::Granted && !context.allows_action(&action.id)
+            {
+                action.authorization = Authorization::Required;
+            }
+        }
         CapabilitySnapshot::new(
             context.connection_epoch.clone(),
             context.session_id.clone(),
             context.grant_epoch.clone(),
             &context.target,
             context.capability_revision,
-            self.backend.descriptors(),
+            actions,
         )
     }
 
@@ -722,7 +733,7 @@ impl<B: ActionBackend> ActionRegistry<B> {
         }
         match descriptor.authorization {
             Authorization::Granted => {
-                if !context.allows(&request.action) {
+                if !context.allows_action(&request.action) {
                     return self.finish(
                         request,
                         fingerprint,
@@ -1478,6 +1489,35 @@ impl<R: CommandRunner> ActionBackend for NiriActionBackend<R> {
     }
 }
 
+/// A target generation that changes when the Niri session/socket changes.
+///
+/// Niri does not expose a compositor boot id through its CLI, so the socket
+/// name (which includes the compositor instance) plus the window id is the best
+/// available generation seed. It is diagnostic, not a cryptographic identity.
+pub fn niri_generation(window_id: u64) -> String {
+    let socket = std::env::var("NIRI_SOCKET").unwrap_or_else(|_| "niri".into());
+    let session = socket.rsplit('/').next().unwrap_or("niri");
+    format!("{session}#w{window_id}")
+}
+
+/// Build a read-only capability snapshot for one live Niri window. This does
+/// not execute any action; grants are supplied by the caller.
+pub fn niri_snapshot(
+    window_id: u64,
+    grants: ActionGrants,
+    capability_revision: u64,
+) -> Result<CapabilitySnapshot, ContractError> {
+    let context = ActionContext {
+        connection_epoch: "local-cli".into(),
+        session_id: None,
+        grant_epoch: "local".into(),
+        target: TargetRef::new(format!("w{window_id}"), niri_generation(window_id))?,
+        capability_revision: capability_revision.max(1),
+        grants,
+    };
+    ActionRegistry::new(NiriActionBackend::default()).snapshot(&context)
+}
+
 /// Deterministic backend used by tests and `capability-test`. It deliberately
 /// includes supported, unsupported, denied and extension actions plus a
 /// dynamic availability flag.
@@ -1903,6 +1943,64 @@ mod tests {
         assert_eq!(result.status, ActionStatus::Rejected);
         assert_eq!(result.error_code, Some(ContractErrorCode::PermissionDenied));
         assert_eq!(registry.backend().calls.len(), 1);
+    }
+
+    #[test]
+    fn snapshot_marks_ungranted_scopes_as_required() {
+        let registry = ActionRegistry::new(FakeActionBackend::default());
+        let mut ungranted = context();
+        ungranted.grants = ActionGrants::default();
+        let snapshot = registry.snapshot(&ungranted).unwrap();
+        assert_eq!(
+            snapshot.action("window.focus").unwrap().authorization,
+            Authorization::Required
+        );
+        assert_eq!(
+            snapshot
+                .action("desktop.workspace.step")
+                .unwrap()
+                .authorization,
+            Authorization::Required
+        );
+
+        let mut granted = ungranted.clone();
+        granted.grants.window_actions = true;
+        granted.grants.desktop_actions = true;
+        let snapshot = registry.snapshot(&granted).unwrap();
+        assert_eq!(
+            snapshot.action("window.focus").unwrap().authorization,
+            Authorization::Granted
+        );
+        assert_eq!(
+            snapshot
+                .action("desktop.workspace.step")
+                .unwrap()
+                .authorization,
+            Authorization::Granted
+        );
+    }
+
+    #[test]
+    fn niri_snapshot_is_read_only_and_marks_unsupported_actions() {
+        let snapshot = niri_snapshot(
+            5,
+            ActionGrants {
+                window_actions: true,
+                desktop_actions: true,
+                clipboard: false,
+            },
+            1,
+        )
+        .unwrap();
+        assert_eq!(snapshot.target_id, "w5");
+        assert!(snapshot.target_generation.ends_with("#w5"));
+        assert_eq!(
+            snapshot.action("window.focus").unwrap().authorization,
+            Authorization::Granted
+        );
+        let maximize = snapshot.action("window.maximize.set").unwrap();
+        assert!(!maximize.supported);
+        assert!(maximize.reason.is_some());
     }
 
     #[test]

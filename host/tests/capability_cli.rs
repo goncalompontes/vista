@@ -44,3 +44,26 @@ fn capability_test_rejects_unexpected_arguments() {
         assert!(stderr.contains("unknown command"), "{stderr}");
     }
 }
+
+#[test]
+fn actions_requires_window_and_rejects_unknown_flags() {
+    for args in [
+        vec!["actions"],
+        vec!["actions", "--window"],
+        vec!["actions", "--window", "not-a-number"],
+        vec!["actions", "--window", "1", "--bogus"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_vista-host"))
+            .args(args)
+            .output()
+            .expect("launch host binary");
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("actions --window")
+                || stderr.contains("--window")
+                || stderr.contains("unknown argument"),
+            "{stderr}"
+        );
+    }
+}

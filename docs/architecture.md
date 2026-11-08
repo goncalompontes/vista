@@ -104,7 +104,10 @@ portable input with explicit release-all cleanup. `ActionRegistry` owns an
 workspace semantics it can actually execute, and marks maximize unsupported
 rather than inventing an equivalent. `vista-host capability-test --json` proves
 allowed, denied, unsupported, unavailable, stale, malformed and duplicate paths
-plus capability updates without reconnect and held-key release. Shared fixtures
+plus capability updates without reconnect and held-key release.
+`vista-host actions --window ID` builds the same snapshot for a live Niri window
+and reflects the requested grants (missing grants appear as `required`); it is
+read-only and executes no native action. Shared fixtures
 are in `docs/fixtures/capabilities-v1.json`; Swift `Codable` models mirror the
 same shapes. No native input injection, menu retrieval or client UI wiring is
 implemented yet, and the diagnostic does not exercise a live Niri action.

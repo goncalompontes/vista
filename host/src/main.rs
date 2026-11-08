@@ -12,6 +12,9 @@ struct HostCapabilities {
 
 fn usage() {
     eprintln!("Usage: vista-host <doctor|capabilities|windows|window ID|watch> [--json]");
+    eprintln!(
+        "       vista-host actions --window ID [--allow-window-actions] [--allow-desktop-actions] [--allow-clipboard] [--json]"
+    );
     eprintln!("       vista-host capture-consent --confirm [--json]");
     eprintln!("       vista-host capture-frame --confirm [--json]");
     eprintln!("       vista-host capture-burst --confirm [--json]");
@@ -467,6 +470,10 @@ fn run() -> Result<(), NiriError> {
                 );
             }
         }
+        [command, rest @ ..] if command.as_str() == "actions" => {
+            let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
+            actions_command(&rest, json, &niri)?;
+        }
         [command] if command.as_str() == "protocol-loopback" => {
             eprintln!(
                 "Running a localhost-only AEAD control-channel loopback; no external listener is opened."
@@ -574,6 +581,70 @@ fn run() -> Result<(), NiriError> {
             usage();
             return Err(NiriError::InvalidArgument("unknown command".into()));
         }
+    }
+    Ok(())
+}
+
+fn actions_command(args: &[&str], json: bool, niri: &Niri) -> Result<(), NiriError> {
+    check_known_arguments(
+        args,
+        &["--window"],
+        &[
+            "--allow-window-actions",
+            "--allow-desktop-actions",
+            "--allow-clipboard",
+        ],
+    )?;
+    let id = option(args, "--window")
+        .ok_or_else(|| NiriError::InvalidArgument("actions requires --window ID".into()))?;
+    let id: u64 = id.parse().map_err(|_| {
+        NiriError::InvalidArgument("--window must be a non-negative integer".into())
+    })?;
+    let window = niri
+        .window(id)?
+        .ok_or_else(|| NiriError::InvalidArgument(format!("window ID {id} was not found")))?;
+    let grants = capability::ActionGrants {
+        window_actions: args.contains(&"--allow-window-actions"),
+        desktop_actions: args.contains(&"--allow-desktop-actions"),
+        clipboard: args.contains(&"--allow-clipboard"),
+    };
+    let snapshot = capability::niri_snapshot(id, grants, 1).map_err(|error| {
+        NiriError::Unavailable(format!("cannot build capability snapshot: {error}"))
+    })?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&snapshot)?);
+    } else {
+        println!(
+            "Host actions for window {} ({}).",
+            id,
+            window.title.as_deref().unwrap_or("(untitled)")
+        );
+        println!(
+            "Target generation {}; capability revision {}.",
+            snapshot.target_generation, snapshot.capability_revision
+        );
+        for action in &snapshot.actions {
+            let state = if !action.supported {
+                "unsupported"
+            } else if !action.enabled {
+                "unavailable"
+            } else {
+                match action.authorization {
+                    capability::Authorization::Granted => "allowed",
+                    capability::Authorization::Required => "permission-required",
+                    capability::Authorization::Denied => "denied",
+                    capability::Authorization::Revoked => "revoked",
+                }
+            };
+            println!(
+                "  {:<28} {:<20} {:<19} {}",
+                action.id,
+                action.presentation.label,
+                state,
+                action.reason.as_deref().unwrap_or("")
+            );
+        }
+        println!("Discovery only; no native action was executed.");
     }
     Ok(())
 }

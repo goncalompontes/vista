@@ -360,6 +360,14 @@ Limits: 256 actions/target, 64 parameters/action, 4 KiB parameter payload,
 text. Unknown parameter schemas are rejected; clients do not receive executable
 validation code, shell commands or arbitrary backend access.
 
+`vista-host actions --window ID [--allow-window-actions] [--allow-desktop-actions]
+[--allow-clipboard] [--json]` now builds a live, read-only Niri snapshot for an
+existing window. It reflects the requested grants: without them a supported
+action is reported as `required`, never as allowed, and the command executes no
+native action. The target generation is derived from the Niri socket/session
+name plus the window id because Niri exposes no compositor boot id through its
+CLI.
+
 Fixtures shared with the Swift models are in
 [`docs/fixtures/capabilities-v1.json`](fixtures/capabilities-v1.json). Rust
 tests decode and validate them, and `vista-host capability-test --json` exercises
