@@ -197,4 +197,4 @@ macOS runner without device signing and runs `VistaCore` tests. Publishing it is
    each gated by explicit session permission.
 
 The current preview deliberately does not impersonate a connected or
-streaming session. Refer to `../docs/roadmap.md` for overall progress.
+streaming session. Before implementing UI controls, consult the [Sill reference and source-to-target map](../docs/sill-reference.md) for native SwiftUI design, gesture, layout and pairing patterns; preserve the source license and attribution where code is reused. Refer to `../docs/roadmap.md` for overall progress.
