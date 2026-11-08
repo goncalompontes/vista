@@ -657,9 +657,6 @@ pub fn synthetic_sync_recovery() -> Result<SyncRecoveryReport, String> {
     synthetic_sync_recovery_with_restart(true)
 }
 
-/// Same diagnostic with the producer-side restart explicitly enabled or
-/// disabled. The no-restart variant proves that the 250-frame GOP cannot
-/// recover the injected loss on its own.
 /// Runs with an external request handle and no internal consumer request. A
 /// control transport can request a keyframe through the handle.
 pub fn synthetic_sync_recovery_with_external_request(

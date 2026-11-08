@@ -33,6 +33,11 @@ fn usage() {
     eprintln!(
         "       vista-host protocol-serve --confirm [--listen ADDR] [--secret-hex HEX] [--allow-remote] [--json]"
     );
+    eprintln!("       vista-host keyframe-control-test [--json]");
+    eprintln!("       vista-host media-stream --serve [--listen ADDR] [--frames N] [--json]");
+    eprintln!(
+        "       vista-host media-stream --connect ADDR --key-hex HEX --session-id ID [--json]"
+    );
     eprintln!("       vista-host protocol-client --connect ADDR --secret-hex HEX [--json]");
 }
 
@@ -726,6 +731,7 @@ fn media_stream_command(args: &[&str], json: bool) -> Result<(), NiriError> {
         ));
     }
     if serve {
+        check_known_arguments(args, &["--listen", "--frames"], &["--serve"])?;
         let listen = option(args, "--listen").unwrap_or("127.0.0.1:0");
         let address: SocketAddr = listen.parse().map_err(|_| {
             NiriError::InvalidArgument("--listen must be an IP:port address".into())
@@ -773,6 +779,7 @@ fn media_stream_command(args: &[&str], json: bool) -> Result<(), NiriError> {
             "media-stream requires --serve or --connect".into(),
         ));
     };
+    check_known_arguments(args, &["--connect", "--key-hex", "--session-id"], &[])?;
     let address: SocketAddr = connect
         .parse()
         .map_err(|_| NiriError::InvalidArgument("--connect must be an IP:port address".into()))?;

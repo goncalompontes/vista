@@ -90,6 +90,8 @@ WebRTC-versus-custom transport analysis are in [protocol.md](protocol.md).
 `vista-host protocol-test --json` verifies the in-memory handshake and the
 wrong-secret, replay, expiry, permission-escalation and version-mismatch paths.
 
+**Control-to-media and two-process transport.** `keyframe-control-test` closes the control/media loop locally: an authenticated control client sends `KeyframeRequest` over the AEAD record transport, a server hook sets a producer request handle, and the synthetic encoder restarts to emit a fresh SPS/PPS IDR (one run: 1 server request, 1 producer request, 1 restart, 10 decoded frames). Separately, `media-stream --serve/--connect` sends real synthetic H.264 access units between two processes: each AU is sealed with ChaCha20-Poly1305 and length-prefixed over localhost TCP; the receiver decrypts and decodes (one run: 12 records / 60,997 ciphertext bytes, 12 decoded frames / 2,764,800 RGBA bytes, 68–432 ms receive-to-decode). The media-stream key is generated and printed in the test offer rather than derived from pairing, and the media client is not authenticated; neither path sends media to iOS.
+
 ### Capabilities, actions and portable input (implemented contract, no injection)
 
 `host/src/capability.rs` implements the backend-agnostic contract described in
