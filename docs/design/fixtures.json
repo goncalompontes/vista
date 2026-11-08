@@ -1,0 +1,176 @@
+{
+  "status": "illustrative-design-not-implemented",
+  "protocol_major": 1,
+  "capability_snapshot": {
+    "v": 1,
+    "type": "capabilities.snapshot",
+    "connection_epoch": "c1",
+    "session_id": "s1",
+    "target_id": "w5",
+    "target_generation": "niri-boot1-w5",
+    "capability_revision": 12,
+    "grant_epoch": "g2",
+    "actions": [
+      {
+        "id": "window.maximize.set",
+        "schema_version": 1,
+        "supported": true,
+        "enabled": true,
+        "authorization": "granted",
+        "parameters": "vista.window.maximize.set.v1",
+        "presentation": {
+          "label": "Maximize",
+          "icon": "window.maximize"
+        },
+        "suggested_bindings": []
+      },
+      {
+        "id": "desktop.overview.show",
+        "schema_version": 1,
+        "supported": false,
+        "enabled": false,
+        "authorization": "required",
+        "reason": "Backend does not implement overview",
+        "parameters": "vista.empty.v1",
+        "presentation": {
+          "label": "Overview"
+        },
+        "suggested_bindings": []
+      }
+    ]
+  },
+  "action_request": {
+    "v": 1,
+    "type": "action.invoke",
+    "id": "r17",
+    "connection_epoch": "c1",
+    "session_id": "s1",
+    "grant_epoch": "g2",
+    "target_id": "w5",
+    "target_generation": "niri-boot1-w5",
+    "capability_revision": 12,
+    "action": "window.maximize.set",
+    "schema_version": 1,
+    "parameters": {
+      "value": true
+    }
+  },
+  "action_result": {
+    "v": 1,
+    "type": "action.result",
+    "id": "r17",
+    "connection_epoch": "c1",
+    "session_id": "s1",
+    "status": "completed",
+    "state": {
+      "maximized": true
+    },
+    "capability_revision": 13
+  },
+  "cases": [
+    {
+      "id": "view_only_input",
+      "given": {
+        "input_control": "required"
+      },
+      "request": "pointer.button",
+      "expect": {
+        "status": "rejected",
+        "error_code": "permission_required",
+        "native_effects": 0
+      }
+    },
+    {
+      "id": "stale_target",
+      "given": {
+        "target_generation": "niri-boot2-w5"
+      },
+      "request": {
+        "target_generation": "niri-boot1-w5"
+      },
+      "expect": {
+        "status": "rejected",
+        "error_code": "stale_context",
+        "native_effects": 0
+      }
+    },
+    {
+      "id": "resize_old_geometry",
+      "given": {
+        "geometry_epoch": 3
+      },
+      "request": {
+        "geometry_epoch": 2,
+        "type": "pointer.absolute",
+        "x": 0.5,
+        "y": 0.5
+      },
+      "expect": {
+        "status": "rejected",
+        "error_code": "stale_context",
+        "native_effects": 0
+      }
+    },
+    {
+      "id": "revoked_grant",
+      "given": {
+        "grant_epoch": "g3"
+      },
+      "request": {
+        "grant_epoch": "g2"
+      },
+      "expect": {
+        "status": "rejected",
+        "error_code": "stale_context",
+        "native_effects": 0
+      }
+    },
+    {
+      "id": "unknown_optional_action",
+      "given": {
+        "action": "example.vendor.special"
+      },
+      "expect": {
+        "standard_control": false,
+        "ignore_safely": true
+      }
+    },
+    {
+      "id": "disconnect_after_close",
+      "given": {
+        "action": "window.close",
+        "result_received": false
+      },
+      "expect": {
+        "status": "outcome_unknown",
+        "automatic_replay": false
+      }
+    },
+    {
+      "id": "clipboard_without_input",
+      "given": {
+        "clipboard_write": "granted",
+        "input_control": "denied"
+      },
+      "request": "paste_now",
+      "expect": {
+        "status": "rejected",
+        "error_code": "permission_denied",
+        "native_effects": 0
+      }
+    },
+    {
+      "id": "shared_seat_scope_mismatch",
+      "given": {
+        "adapter_scope": "shared_desktop",
+        "grant_scope": "window_only"
+      },
+      "request": "key.physical",
+      "expect": {
+        "status": "rejected",
+        "error_code": "permission_required",
+        "native_effects": 0
+      }
+    }
+  ]
+}

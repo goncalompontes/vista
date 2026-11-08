@@ -1,5 +1,9 @@
 # Vista architecture
 
+## Detailed design draft
+
+The [client and host architecture package](design/README.md) records current product decisions, Sill interaction inventory, capability/input protocol, lifecycles, security, native screen flows, adapter boundaries and media trade-offs. It is proposed behavior, not implemented functionality. For those details it supersedes provisional choices in this overview, including the transport preference below. Track review in [goal #8](https://github.com/goncalompontes/vista/issues/8).
+
 ## Product targets
 
 1. **Existing-window mode:** discover a window in the user's active Niri desktop, request authorized capture, encode and stream its content, return remote input only while explicitly permitted.
