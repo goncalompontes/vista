@@ -327,6 +327,49 @@ See [`docs/fixtures/protocol-v1.json`](fixtures/protocol-v1.json) for the exact
 field names and a complete synthetic exchange. The Rust fixture test decodes
 these frames; a Swift `Codable` test should use the same file.
 
+## Capabilities, actions and portable input
+
+`host/src/capability.rs` implements the first transport-independent part of the
+client/host contract:
+
+- `CapabilitySnapshot` attaches versioned action descriptors to a target and
+  capability revision. Each descriptor records `supported`, `enabled`, an
+  authorization state, a registered parameter-schema ID, bounded presentation
+  data and optional gesture hints.
+- `ActionRequest`/`ActionResult` carry request IDs, connection/grant epochs,
+  target generation and capability revision. The registry rejects stale
+  contexts before execution, revalidates target/revision/grant/authorization,
+  validates the registered parameter schema and returns `completed`, `rejected`,
+  `failed` or `outcome_unknown` truthfully.
+- Request IDs are de-duplicated per connection (last 1024 results, 60-second
+  window); conflicting ID reuse is rejected. Action requests are limited to
+  20/s and destructive close/launch requests to 2/s.
+- `MenuSnapshot` bounds depth and item count and requires opaque, unique item
+  IDs; invocation is expected to carry the menu revision.
+- Portable input is separate from semantic actions. Physical key usage, buttons,
+  relative/absolute pointer movement, scroll units/phases and committed text are
+  modelled explicitly. Absolute input is rejected on a mismatched geometry
+  epoch, and `InputLease::release_all` clears held keys/buttons on cancel,
+  revoke or disconnect without being throttled.
+- `NiriActionBackend` is the first adapter. It advertises focus/close/workspace
+  step, marks maximize unsupported, and routes commands through a testable
+  `CommandRunner` instead of a compositor-specific client path.
+
+Limits: 256 actions/target, 64 parameters/action, 4 KiB parameter payload,
+256-byte labels, 1024-byte reasons, menu depth 6 and 512 items, 16 KiB committed
+text. Unknown parameter schemas are rejected; clients do not receive executable
+validation code, shell commands or arbitrary backend access.
+
+Fixtures shared with the Swift models are in
+[`docs/fixtures/capabilities-v1.json`](fixtures/capabilities-v1.json). Rust
+tests decode and validate them, and `vista-host capability-test --json` exercises
+the rejection, availability, revision, duplicate, reconnect and cleanup paths.
+
+Not implemented: native pointer/keyboard injection, menu retrieval from real
+applications, policy-driven remembered grants, client UI wiring, and live
+verification of Niri actions. The contract is not yet carried over the network
+control channel.
+
 ## Implemented, verified and pending
 
 Implemented and unit-tested in `host/src/protocol.rs`:
@@ -336,7 +379,9 @@ Implemented and unit-tested in `host/src/protocol.rs`:
   identifier/nonce validation;
 - host and client state machines, permissions and denial paths;
 - `vista-host protocol-test --json` in-memory diagnostic;
-- Rust decoding of the Swift-compatible fixtures.
+- Rust decoding of the Swift-compatible fixtures;
+- the capability/action/portable-input contract in `host/src/capability.rs`,
+  its shared fixtures and the `capability-test --json` diagnostic.
 
 Test evidence on the development host:
 
@@ -358,7 +403,8 @@ Not implemented:
 - persistent host identity, certificate pinning or attestation;
 - WebRTC signaling/media, RTP packetization, congestion control and keyframe
   request wiring;
-- input injection, clipboard transfer, audio and iOS client code;
+- native input injection, clipboard transfer, menu retrieval, audio and iOS
+  client code;
 - rate limiting, audit and external security review.
 
 Do not describe this as a secure remote-streaming implementation until those
