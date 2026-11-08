@@ -379,10 +379,12 @@ Fixtures shared with the Swift models are in
 tests decode and validate them, and `vista-host capability-test --json` exercises
 the rejection, availability, revision, duplicate, reconnect and cleanup paths.
 
-Not implemented: native pointer/keyboard injection, menu retrieval from real
-applications, policy-driven remembered grants, client UI wiring, and live
-verification of Niri actions. The contract is not yet carried over the network
-control channel.
+The control envelope now defines `capabilities.snapshot`, `action.invoke` and
+`action.result` variants plus lossless conversions to and from the capability
+types, with a round-trip test. A transport does not dispatch them yet: native
+pointer/keyboard injection, menu retrieval from real applications, policy-driven
+remembered grants, client UI wiring and live Niri action verification remain
+open.
 
 ## Implemented, verified and pending
 
