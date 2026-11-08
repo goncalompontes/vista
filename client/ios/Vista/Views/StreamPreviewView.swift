@@ -49,6 +49,11 @@ struct StreamPreviewView: View {
                     control("keyboard", label: "Keyboard")
                     control("speaker.wave.2", label: "Audio")
                 }
+
+                CapabilityControlsView(snapshot: DemoCatalog.capabilitySnapshot) { _ in
+                    // Discovery is real once a host is paired; the preview does
+                    // not execute native actions.
+                }
             }
             .frame(maxWidth: 760)
             .padding(20)
