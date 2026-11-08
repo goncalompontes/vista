@@ -11,6 +11,7 @@ pub mod decoder_sync;
 pub mod keyframe_control;
 pub mod live;
 pub mod media;
+pub mod media_stream;
 pub mod output_capture;
 pub mod pipewire_loopback;
 pub mod portal;
