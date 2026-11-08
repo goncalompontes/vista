@@ -8,6 +8,8 @@ Inspired by [Sill](https://github.com/Saffsanity/sill); not a fork or a drop-in 
 
 **Milestone 0 — live Linux host discovery.** The Rust host CLI discovers running Niri windows by ID, emits an incremental event stream for the window catalog, and probes the desktop ScreenCast portal without requesting capture. The iOS/iPadOS SwiftUI preview is now in `client/`, with no network connection or media yet. Vista does **not** yet capture pixels, stream video, authenticate clients, or launch isolated sessions. See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).
 
+A versioned, transport-neutral control protocol now exists in `host/src/protocol.rs`: bounded JSON frames, explicit version negotiation, a 256-bit out-of-band pairing secret with HMAC-SHA256 confirmation, HKDF session keys, strict sequencing, expiring offers and deny-by-default permissions. It is verified in memory by `protocol-test` and the fixtures in [docs/protocol.md](docs/protocol.md), but **no network transport, frame encryption, discovery or iOS integration is implemented yet**.
+
 ## Develop
 
 Requirements: Rust/Cargo, a running Niri compositor and the `niri` executable on PATH.
@@ -21,6 +23,8 @@ cargo run -- windows --json
 cargo run -- window 5 --json
 cargo run -- watch --json
 cargo run -- capabilities --json
+# In-memory control-protocol pairing/session diagnostic; no network, capture or input:
+cargo run -- protocol-test --json
 ```
 
 Window IDs come from the active Niri session and can change after a window closes or the compositor restarts. `--json` supports programmatic consumers. When running through a tool or service with a sanitized environment, export `NIRI_SOCKET` from the active Niri session before invoking the host CLI.
@@ -29,6 +33,8 @@ Window IDs come from the active Niri session and can change after a window close
 
 - `host/`: Rust Linux host service foundation, including Niri window discovery, live window catalog events, and read-only portal capability diagnostics.
 - `client/`: native iOS/iPadOS SwiftUI shell, portable Swift models, and an [interactive Arch browser preview](client/preview/README.md) for UI iteration; see [client setup](client/README.md).
+- `docs/protocol.md`: versioned host/client control protocol, pairing, threat model and transport recommendation.
+- `docs/protocol.md`: versioned host/client control protocol, pairing, threat model and transport recommendation.
 - `docs/architecture.md`: host, transport, iOS, compositing and session architecture.
 - `docs/roadmap.md`: phased implementation and acceptance milestones.
 

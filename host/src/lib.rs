@@ -5,6 +5,7 @@
 
 pub mod catalog;
 pub mod portal;
+pub mod protocol;
 
 use serde::{Deserialize, Serialize};
 use std::env;

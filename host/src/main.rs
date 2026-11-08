@@ -1,6 +1,6 @@
 use std::env;
 use std::process::ExitCode;
-use vista_host::{Niri, NiriError, portal, watch_windows};
+use vista_host::{Niri, NiriError, portal, protocol, watch_windows};
 
 #[derive(serde::Serialize)]
 struct HostCapabilities {
@@ -9,7 +9,10 @@ struct HostCapabilities {
 }
 
 fn usage() {
-    eprintln!("Usage: vista-host <doctor|capabilities|windows|window ID|watch> [--json]");
+    eprintln!(
+        "Usage: vista-host <doctor|capabilities|windows|window ID|watch|protocol-test> [--json]"
+    );
+    eprintln!("       vista-host protocol-test [--json]");
 }
 
 fn run() -> Result<(), NiriError> {
@@ -79,6 +82,38 @@ fn run() -> Result<(), NiriError> {
                 );
             }
         }
+        [command] if command.as_str() == "protocol-test" => {
+            eprintln!(
+                "Running the in-memory protocol pairing/session diagnostic; no network, media or input access."
+            );
+            let report = vista_host::protocol::diagnostic().map_err(|error| {
+                NiriError::Unavailable(format!("protocol diagnostic failed: {error}"))
+            })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Protocol {} handshake verified: host={}, client={}, {} control frames / {} bytes, keys match={}, permissions video={} input={} clipboard={}.",
+                    report.protocol,
+                    report.host_state,
+                    report.client_state,
+                    report.client_frames + report.host_frames,
+                    report.wire_bytes,
+                    report.keys_match,
+                    report.permissions.video,
+                    report.permissions.input,
+                    report.permissions.clipboard
+                );
+                println!(
+                    "Negative checks: wrong secret={}, replay={}, expired offer={}, permission escalation={}, version mismatch={}.",
+                    report.wrong_secret_rejected,
+                    report.replayed_proof_rejected,
+                    report.expired_offer_rejected,
+                    report.permission_escalation_rejected,
+                    report.version_mismatch_rejected
+                );
+            }
+        }
         [command] if command.as_str() == "watch" => watch_windows(json)?,
         [command] if command.as_str() == "windows" => {
             let windows = niri.windows()?;
@@ -120,6 +155,44 @@ fn run() -> Result<(), NiriError> {
                     window
                         .workspace_id
                         .map_or_else(|| "unknown".into(), |id| id.to_string())
+                );
+            }
+        }
+        [command] if command.as_str() == "protocol-test" => {
+            eprintln!(
+                "Running an in-memory control-plane pairing and session test; no network, capture or input access."
+            );
+            let report = protocol::diagnostic()
+                .map_err(|err| NiriError::Unavailable(format!("protocol test failed: {err}")))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Control protocol {}: host={} client={}, {} client frames / {} host frames / {} bytes; keys match={}, fingerprint={}.",
+                    report.protocol,
+                    report.host_state,
+                    report.client_state,
+                    report.client_frames,
+                    report.host_frames,
+                    report.wire_bytes,
+                    report.keys_match,
+                    report.key_fingerprint
+                );
+                println!(
+                    "Permissions: video={} audio={} input={} clipboard={}.",
+                    report.permissions.video,
+                    report.permissions.audio,
+                    report.permissions.input,
+                    report.permissions.clipboard
+                );
+                println!(
+                    "Negative checks: wrong-secret={} replay={} expired={} permission-escalation={} version-mismatch={}; verified={}.",
+                    report.wrong_secret_rejected,
+                    report.replayed_proof_rejected,
+                    report.expired_offer_rejected,
+                    report.permission_escalation_rejected,
+                    report.version_mismatch_rejected,
+                    report.verified
                 );
             }
         }

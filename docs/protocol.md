@@ -1,0 +1,326 @@
+# Vista control protocol v1
+
+Status: **implemented in memory, not deployed.** The Rust host has a versioned
+control-frame codec, a PSK-based pairing handshake, per-session key derivation,
+explicit permissions and host/client state machines with negative tests. There
+is **no socket, TLS/QUIC, discovery, WebRTC, media encryption, iOS client
+implementation or audit** yet. This document separates the implemented contract
+from the planned transport.
+
+Related: [architecture](architecture.md), [roadmap](roadmap.md), and the
+[Swift-compatible fixtures](fixtures/protocol-v1.json).
+
+## Scope
+
+The control protocol carries discovery results, pairing, authorization, session
+lifecycle, permission changes and media negotiation. Encoded H.264 access units
+are a separate media channel; this protocol does not carry pixels. The M1
+`StreamSession`/`H264SyncGate` boundary remains the producer-side source of
+discontinuities and keyframe requirements.
+
+## Versioning
+
+- The current version is **1.0**; the minimum supported version is **1.0**.
+- A client sends a `min`/`max` version range. The host selects the highest
+  version in the intersection with its own supported range.
+- No intersection is a hard failure (`UnsupportedVersion`) before any pairing
+  material is accepted.
+- Additive JSON fields are ignored by version-1 decoders. Removing or changing
+  field semantics requires a major-version bump.
+- There is no downgrade without an intersection; a version-2-only client cannot
+  fall back to version 1 silently.
+
+## Framing
+
+```text
++----------------------+--------------------------------------+
+| u32 big-endian length| UTF-8 JSON message (length bytes)    |
++----------------------+--------------------------------------+
+```
+
+- One frame contains exactly one [`Envelope`](../host/src/protocol.rs).
+- The JSON body is capped at **64 KiB**; larger frames are rejected before
+  parsing. Zero-length frames are malformed.
+- The control connection must be reliable and ordered. Each direction has its
+  own `seq`, starting at `0` and increasing by exactly one. A duplicate, gap or
+  replayed frame fails the handshake closed.
+- Media must **not** share this framing or these sequence numbers. A separate
+  media transport carries access units and has its own loss/recovery rules.
+
+Envelope shape:
+
+```json
+{
+  "seq": 0,
+  "type": "client_hello",
+  "versions": { "min": { "major": 1, "minor": 0 }, "max": { "major": 1, "minor": 0 } },
+  "client_id": "iphone-15",
+  "client_nonce": "000102...1e1f"
+}
+```
+
+## Pairing
+
+Pairing uses a **256-bit secret transferred out of band**, for example in a QR
+code shown by the host and scanned by the client, or copied through a trusted
+local channel. It is never sent over the control connection.
+
+A six-digit code is deliberately not accepted. The confirmation tags would be
+offline-guessable by a passive eavesdropper, and no PAKE is implemented. A
+future short-code flow needs SPAKE2/OPAQUE (or Noise with a PSK and SAS
+verification), not a truncated HMAC.
+
+### Sequence
+
+```text
+client                                      host
+  |  ClientHello { versions, client_id,       |
+  |                client_nonce }  (seq 0)    |
+  |------------------------------------------>|
+  |                                           | validates version, id, nonce
+  |  ServerHello { selected, host_id,         |
+  |                host_name, host_nonce,     |
+  |                pairing_id, expires_at,    |
+  |                policy }  (seq 0)          |
+  |<------------------------------------------|
+  |                                           |
+  |  PairingRequest { pairing_id, tag }       |
+  |  (seq 1)                                  |
+  |------------------------------------------>|
+  |                                           | checks expiry + pairing_id,
+  |                                           | verifies client tag
+  |  PairingAccepted { tag, session_id,       |
+  |                    permissions } (seq 1)  |
+  |<------------------------------------------|
+  |                                           |
+  |  SessionOpen { session_id, permissions }  |
+  |  (seq 2)                                  |
+  |------------------------------------------>|
+  |  SessionOpened { session_id, permissions }|
+  |  (seq 2)                                  |
+  |<------------------------------------------|
+```
+
+`expires_at` is the host's Unix time when the offer stops being valid. The host
+enforces it; clients should also stop presenting an expired offer. The default
+TTL is 120 seconds.
+
+### Transcript and keys
+
+Both sides build the same canonical transcript:
+
+```text
+vista-pairing-v1
+version=<major>.<minor>
+client_id=<client_id>
+client_nonce=<client_nonce>
+host_id=<host_id>
+host_nonce=<host_nonce>
+pairing_id=<pairing_id>
+policy=<bits>
+```
+
+(Each line ends with `\n`; identifiers are printable ASCII and cannot contain a
+newline. `policy` is a bit mask: bit 0 video, bit 1 audio, bit 2 input, bit 3
+clipboard.)
+
+Confirmation tags are HMAC-SHA256:
+
+```text
+client_tag = HMAC-SHA256(secret, "client-confirm\n" || transcript)
+host_tag   = HMAC-SHA256(secret, "host-confirm\n"   || transcript || "\nsession=" || session_id)
+```
+
+The host verifies the client tag in constant time before accepting pairing; the
+client verifies the host tag before deriving keys. The session identifier is
+generated by the host and returned in `PairingAccepted`; it must be treated as
+opaque and validated as 16 bytes.
+
+Session keys are HKDF-SHA256 over the same secret:
+
+```text
+salt = pairing_id
+ikm  = secret
+info = "vista-session-v1\n" || pairing_id || "\n" || session_id || "\n" || transcript
+```
+
+64 bytes are expanded and split into independent **client-to-host** and
+**host-to-client** keys. They are *derived but not yet used*: the transport
+record layer and its nonce discipline are not implemented.
+
+## Sessions and permissions
+
+Every capability defaults to denied:
+
+```json
+{ "video": true, "audio": false, "input": false, "clipboard": false }
+```
+
+- The host advertises its policy in `ServerHello` and `PairingAccepted`.
+- The client requests a subset in `SessionOpen`. The host grants the requested
+  subset or rejects the whole request; it never silently adds a capability.
+- Input and clipboard have no implicit grant. A host must obtain explicit user
+  consent before advertising them in its policy.
+- `audio` is reserved for a later media/audio implementation and is denied by
+  default.
+- Revocation is a host-side action that closes the session; a transport must
+  also stop delivering media and drop the session keys.
+
+State machines:
+
+```text
+host:   AwaitingHello -> AwaitingPairing -> Paired -> Active -> Closed
+                                        \-> Failed on expiry/auth/permission/sequence errors
+
+client: AwaitingHello -> AwaitingServerHello -> AwaitingPairingAccepted
+        -> Paired -> AwaitingSessionOpened -> Active -> Closed / Failed
+```
+
+The host is authoritative. A failed authentication, expired offer, sequence
+error or permission escalation is terminal for that connection. A new
+connection requires a new pairing exchange.
+
+`KeyframeRequest` asks the producer for a fresh IDR (the media layer maps it to
+an encoder force-key-unit request when supported). `Ping`/`Pong` are liveness
+checks. `SessionClose` is a clean shutdown; transport loss must also revoke the
+session.
+
+## Media boundary
+
+After `SessionOpened`, media is expected to be H.264 Annex-B access units, one
+IDR/recovery point per keyframe, and the `H264SyncGate` rules from the capture
+path apply:
+
+- New consumers receive a discontinuity before data and wait for an
+  SPS/PPS-prefixed IDR.
+- Queue overflow, geometry change, producer `DISCONT` or a reconnect must be
+  surfaced as a discontinuity; delta units are suppressed until a fresh IDR.
+- `KeyframeRequest` should be forwarded to the producer. The current encoder
+  diagnostic does not yet implement active IDR requests.
+
+This document does **not** define packetization, congestion control, RTP
+depacketization, jitter buffering or iOS VideoToolbox integration.
+
+## Transport choice: WebRTC vs custom
+
+Requirements: mutual authentication, encryption, NAT traversal, congestion
+control, loss recovery, keyframe requests, iOS support and bounded buffering.
+
+| Concern | WebRTC | Custom TLS/QUIC + RTP |
+| --- | --- | --- |
+| Encryption | DTLS-SRTP, mature | TLS 1.3/QUIC, mature |
+| Congestion control | GCC/transport-cc, NACK, PLI/FIR | must be built or borrowed |
+| NAT traversal | ICE/STUN/TURN | must be built |
+| iOS integration | WebRTC.framework, VideoToolbox-friendly | lower-level, more client work |
+| Implementation size | large dependency, standard interop | smaller surface, more media work |
+
+**Recommendation:** use WebRTC for the media path and carry discovery, pairing,
+authorization and session control over an authenticated TLS/QUIC stream running
+this protocol. Let WebRTC provide DTLS-SRTP, ICE, congestion control and
+NACK/PLI/FIR rather than inventing them. A custom transport is only justified if
+WebRTC's dependency and signaling complexity become a demonstrated problem.
+
+This is a design recommendation, not an implemented transport.
+
+## Threat model and trust boundaries
+
+Protect:
+
+- captured pixels and encoded media;
+- input events and clipboard contents;
+- the pairing secret and derived session keys;
+- the user's ability to see and revoke an active session.
+
+Adversaries:
+
+- a passive attacker on the local network;
+- an active man-in-the-middle who can relay or modify control frames;
+- a malicious or compromised client;
+- a stolen client device or leaked QR code;
+- a client that sends oversized, replayed or out-of-order frames;
+- a client that requests capabilities it was not granted.
+
+Mitigations implemented here:
+
+- a 256-bit out-of-band secret, HMAC-SHA256 mutual confirmation and HKDF session
+  keys;
+- a versioned, size-bounded JSON frame codec with strict per-direction
+  sequence numbers;
+- short-lived pairing offers, opaque pairing/session identifiers and fail-closed
+  authentication;
+- deny-by-default video/audio/input/clipboard permissions and host-side grant
+  checks;
+- bounds on identifiers, dimensions and frame rate in `VideoConfig`;
+- a diagnostic that exercises wrong-secret, replay, expiry, escalation and
+  version-mismatch paths.
+
+Residual risks and non-goals:
+
+- **No forward secrecy.** Compromise of the long-lived pairing secret compromises
+  sessions derived from it. Rotate/re-pair after suspected compromise.
+- **No host identity signature or attestation.** The QR/secret is the only root
+  of trust; a user who scans an attacker's QR pairs with the attacker.
+- **No transport yet.** Control frames are plaintext JSON until the planned
+  TLS/QUIC record layer exists; the derived keys are not used for encryption.
+- **No cross-connection replay window.** Sequence numbers protect one ordered
+  connection; a transport must provide its own replay protection.
+- **No rate limiting, DoS hardening, audit or external review.**
+- **No discovery.** mDNS/TXT is a future addition; discovery output is untrusted
+  until pairing verifies the secret.
+- Metadata (host/client identifiers, timing) is visible to the transport and
+  may be visible on the local network before encryption is added.
+
+## Swift integration contract
+
+The JSON is intentionally `Codable`-friendly:
+
+- `type` is a snake_case string tag.
+- Binary values (`client_nonce`, `host_nonce`, `pairing_id`, `session_id`,
+  `tag`) are lowercase hex strings with fixed byte lengths.
+- `seq` is `UInt64`; `expires_at` is Unix seconds as `UInt64`.
+- `PermissionSet` fields are booleans and default to `false` when absent.
+- Frames are length-prefixed JSON; the Swift client must enforce the 64 KiB
+  bound and the sequence rules.
+- Error codes map to a local `ProtocolError` enum; do not continue a connection
+  after an authentication, expiry, sequence or permission failure.
+
+See [`docs/fixtures/protocol-v1.json`](fixtures/protocol-v1.json) for the exact
+field names and a complete synthetic exchange. The Rust fixture test decodes
+these frames; a Swift `Codable` test should use the same file.
+
+## Implemented, verified and pending
+
+Implemented and unit-tested in `host/src/protocol.rs`:
+
+- version negotiation, bounded framing, strict sequencing;
+- PSK pairing, HMAC confirmation, HKDF-SHA256 session keys, expiry and
+  identifier/nonce validation;
+- host and client state machines, permissions and denial paths;
+- `vista-host protocol-test --json` in-memory diagnostic;
+- Rust decoding of the Swift-compatible fixtures.
+
+Test evidence on the development host:
+
+```text
+cargo test --workspace
+  ... protocol tests: 12 passed
+  ... CLI tests: 2 passed
+cargo run -- protocol-test --json
+  protocol 1.0, Active/Active, keys match,
+  wrong secret/replay/expiry/escalation/version mismatch all rejected,
+  verified: true
+```
+
+Not implemented:
+
+- sockets, TLS/QUIC, AEAD records, nonce management and transport replay
+  protection;
+- mDNS discovery and a pairing QR/user interface;
+- persistent host identity, certificate pinning or attestation;
+- WebRTC signaling/media, RTP packetization, congestion control and keyframe
+  request wiring;
+- input injection, clipboard transfer, audio and iOS client code;
+- rate limiting, audit and external security review.
+
+Do not describe this as a secure remote-streaming implementation until those
+transport and client pieces exist and are verified end to end.

@@ -49,6 +49,47 @@ Prototype video path: portal/compositor capture → PipeWire frames → VA-API/N
 
 Explicit pairing, mutual authenticated session keys, least-privilege capture and control, visible session revocation, no unauthenticated host listening, no arbitrary command execution from client messages. Isolated process != security sandbox; define filesystem, network, credentials, seat and clipboard exposure before promising app isolation.
 
+### Control protocol and pairing (implemented, transport-neutral)
+
+`host/src/protocol.rs` now defines a versioned JSON control plane for the host
+and client. Control messages are length-prefixed (64 KiB maximum), carry strict
+per-direction sequence numbers, negotiate a protocol version, and use an
+explicit state machine (`awaiting hello` → `awaiting proof` → `paired` →
+`active`). Pairing uses a 256-bit secret transferred out of band (for example a
+QR code), HMAC-SHA256 confirmation in both directions and HKDF-SHA256 session
+keys; offers expire after 120 seconds. Video, audio, input and clipboard are
+denied by default, and the host re-checks every requested permission before a
+session becomes active.
+
+This is a control-plane boundary only. The current implementation has **no
+listener, discovery, TLS/QUIC/WebRTC transport, frame encryption or iOS client**;
+the derived keys are not yet used by an AEAD layer. It also has no forward
+secrecy, host identity signature or external audit. The full contract, threat
+model and WebRTC-versus-custom transport analysis are in
+[protocol.md](protocol.md). `vista-host protocol-test --json` verifies the
+in-memory handshake and the wrong-secret, replay, expiry, permission-escalation
+and version-mismatch paths.
+
+### Control protocol and pairing (implemented, transport-neutral)
+
+`host/src/protocol.rs` defines a versioned JSON control plane for the host and
+client. Control messages are length-prefixed (64 KiB maximum), carry strict
+per-direction sequence numbers, negotiate a protocol version, and use an
+explicit state machine (`awaiting hello` → `awaiting proof` → `paired` →
+`active`). Pairing uses a 256-bit secret transferred out of band (for example a
+QR code), HMAC-SHA256 confirmation in both directions and HKDF-SHA256 session
+keys; offers expire after 120 seconds. Video, audio, input and clipboard are
+denied by default, and the host re-checks every requested permission before a
+session becomes active.
+
+This is a control-plane boundary only. There is **no listener, discovery,
+TLS/QUIC/WebRTC transport, frame encryption or iOS client**; the derived keys
+are not yet used by an AEAD layer. It also has no forward secrecy, host identity
+signature or external audit. The full contract, threat model and
+WebRTC-versus-custom transport analysis are in [protocol.md](protocol.md).
+`vista-host protocol-test --json` verifies the in-memory handshake and the
+wrong-secret, replay, expiry, permission-escalation and version-mismatch paths.
+
 ### State of implementation
 
-Niri window discovery, incremental window catalog events and a read-only desktop portal ScreenCast capability probe are implemented. On the tested system, ScreenCast version 5 advertises source mask 7 (monitor/window/virtual-monitor) and cursor mask 7; this does **not** verify Niri-specific per-window capture or grant permission to record. A SwiftUI iPhone/iPad app **preview** and cross-platform `VistaCore` model package now exist under `client/`. They use explicit sample data and do not connect to the host. Actual consented capture, encoding, transport, input, pairing, isolated sessions and a functioning iOS client remain architectural targets.
+Niri window discovery, incremental window catalog events and a read-only desktop portal ScreenCast capability probe are implemented. On the tested system, ScreenCast version 5 advertises source mask 7 (monitor/window/virtual-monitor) and cursor mask 7; this does **not** verify Niri-specific per-window capture or grant permission to record. A SwiftUI iPhone/iPad app **preview** and cross-platform `VistaCore` model package now exist under `client/`. They use explicit sample data and do not connect to the host. Actual consented capture, encoding, network transport, encrypted transport, input and a functioning iOS client remain architectural targets; the in-memory pairing/session state machine described above is implemented but not deployed.

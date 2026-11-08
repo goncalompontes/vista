@@ -17,7 +17,7 @@
 
 ## M2 — secure remote session
 
-- [ ] Host-client authenticated pairing and session state machine.
+- [ ] Host-client authenticated pairing and session state machine. A versioned, transport-neutral control-frame codec and state machine now exist (`host/src/protocol.rs`, `protocol-test`) with HMAC-SHA256 confirmation, HKDF session keys, version negotiation, strict sequencing, offer expiry and deny-by-default permissions; negative tests cover wrong secrets, replay/order, expiry, permission escalation and version mismatch, and Swift-compatible JSON fixtures exist. No listener, discovery, TLS/QUIC/WebRTC transport, frame encryption, host identity signature or iOS integration yet; the PSK design has no forward secrecy. A versioned, transport-neutral control-frame codec and state machine now exist (`host/src/protocol.rs`, `protocol-test`) with HMAC-SHA256 confirmation, HKDF session keys, version negotiation, strict sequencing, offer expiry and deny-by-default permissions; negative tests cover wrong secrets, replay/order, expiry, permission escalation and version mismatch, and Swift-compatible JSON fixtures exist. No listener, discovery, TLS/QUIC/WebRTC transport, frame encryption, host identity signature or iOS integration yet; the PSK design has no forward secrecy.
 - [ ] Low-latency encrypted transport and reconnect/backpressure.
 - [ ] Input translation: pointer, touch gestures, keyboard and modifiers.
 - [ ] Per-stream permissions and revoke mechanism.
