@@ -7,6 +7,7 @@ pub mod bridge;
 pub mod capability;
 pub mod capture;
 pub mod catalog;
+pub mod control_lease;
 pub mod decoder_sync;
 pub mod keyframe_control;
 pub mod live;
