@@ -2,7 +2,7 @@ use std::env;
 use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::process::ExitCode;
-use vista_host::{Niri, NiriError, portal, protocol, watch_windows};
+use vista_host::{Niri, NiriError, capability, portal, protocol, watch_windows};
 
 #[derive(serde::Serialize)]
 struct HostCapabilities {
@@ -21,6 +21,7 @@ fn usage() {
     eprintln!("       vista-host bridge-test [--json]");
     eprintln!("       vista-host sync-test [--json]");
     eprintln!("       vista-host capture-h264 --confirm [--json]");
+    eprintln!("       vista-host capability-test [--json]");
     eprintln!("       vista-host protocol-test [--json]");
     eprintln!("       vista-host protocol-loopback [--json]");
     eprintln!(
@@ -444,6 +445,43 @@ fn run() -> Result<(), NiriError> {
         [command, rest @ ..] if command.as_str() == "protocol-client" => {
             let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
             protocol_client(&rest, json)?;
+        }
+        [command] if command.as_str() == "capability-test" => {
+            eprintln!(
+                "Running the backend-agnostic capability/action contract diagnostic; no network, capture or input injection."
+            );
+            let report = capability::diagnostic().map_err(|error| {
+                NiriError::Unavailable(format!("capability contract diagnostic failed: {error}"))
+            })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Capability contract v{} ({} backend, revision {}): {} actions.",
+                    report.contract_version,
+                    report.backend,
+                    report.capability_revision,
+                    report.action_count
+                );
+                println!(
+                    "Allowed={}, denied={}, unsupported={}, unavailable={}, stale={}, malformed={}, duplicate-cached={}.",
+                    report.allowed_completed,
+                    report.denied_rejected,
+                    report.unsupported_rejected,
+                    report.unavailable_rejected,
+                    report.stale_rejected,
+                    report.malformed_rejected,
+                    report.duplicate_cached
+                );
+                println!(
+                    "Capability update without reconnect={}, reconnect clears history={}, input permission enforced={}, release-all clears held state={}, verified={}.",
+                    report.update_without_reconnect,
+                    report.reconnect_clears_history,
+                    report.input_denied_without_permission,
+                    report.release_all_clears_held_keys,
+                    report.verified
+                );
+            }
         }
         _ => {
             usage();
