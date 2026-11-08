@@ -85,7 +85,10 @@ session becomes active.
 After pairing, a bounded ChaCha20-Poly1305 record layer encrypts control
 frames with implicit per-direction nonce counters and AAD bound to the session
 and direction. `protocol-loopback` exercises the full pairing and encrypted
-`SessionOpen`/`KeyframeRequest`/`Ping` over a real `127.0.0.1` TCP socket. This
+`SessionOpen`/`KeyframeRequest`/`Ping` over a real `127.0.0.1` TCP socket; a
+one-shot `protocol-serve` listener and `protocol-client` reference client run
+the same exchange across two processes (non-loopback binding requires an
+explicit `--allow-remote`). This
 is a loopback diagnostic and record boundary, **not** a production transport:
 there is no public listener, discovery, TLS/QUIC/WebRTC, metadata protection,
 congestion control or iOS client, and the protocol has no forward secrecy, host

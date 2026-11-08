@@ -1,4 +1,6 @@
 use std::env;
+use std::io::{self, Write};
+use std::net::SocketAddr;
 use std::process::ExitCode;
 use vista_host::{Niri, NiriError, portal, protocol, watch_windows};
 
@@ -14,6 +16,10 @@ fn usage() {
     );
     eprintln!("       vista-host protocol-test [--json]");
     eprintln!("       vista-host protocol-loopback [--json]");
+    eprintln!(
+        "       vista-host protocol-serve --confirm [--listen ADDR] [--secret-hex HEX] [--allow-remote] [--json]"
+    );
+    eprintln!("       vista-host protocol-client --connect ADDR --secret-hex HEX [--json]");
 }
 
 fn run() -> Result<(), NiriError> {
@@ -141,6 +147,14 @@ fn run() -> Result<(), NiriError> {
                 );
             }
         }
+        [command, rest @ ..] if command.as_str() == "protocol-serve" => {
+            let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
+            protocol_serve(&rest, json)?;
+        }
+        [command, rest @ ..] if command.as_str() == "protocol-client" => {
+            let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
+            protocol_client(&rest, json)?;
+        }
         [command] if command.as_str() == "watch" => watch_windows(json)?,
         [command] if command.as_str() == "windows" => {
             let windows = niri.windows()?;
@@ -253,6 +267,150 @@ fn run() -> Result<(), NiriError> {
             usage();
             return Err(NiriError::InvalidArgument("unknown command".into()));
         }
+    }
+    Ok(())
+}
+
+fn option<'a>(args: &'a [&'a str], name: &str) -> Option<&'a str> {
+    args.iter()
+        .position(|arg| *arg == name)
+        .and_then(|index| args.get(index + 1))
+        .copied()
+}
+
+fn check_known_arguments(
+    args: &[&str],
+    value_flags: &[&str],
+    boolean_flags: &[&str],
+) -> Result<(), NiriError> {
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index];
+        if boolean_flags.contains(&argument) {
+            index += 1;
+        } else if value_flags.contains(&argument) {
+            if index + 1 >= args.len() {
+                return Err(NiriError::InvalidArgument(format!(
+                    "{argument} requires a value"
+                )));
+            }
+            index += 2;
+        } else {
+            return Err(NiriError::InvalidArgument(format!(
+                "unknown argument {argument}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// One-shot control listener. It never captures or streams media, and it
+/// refuses non-loopback addresses unless the caller explicitly opts in.
+fn protocol_serve(args: &[&str], json: bool) -> Result<(), NiriError> {
+    check_known_arguments(
+        args,
+        &["--listen", "--secret-hex"],
+        &["--confirm", "--allow-remote"],
+    )?;
+    if !args.contains(&"--confirm") {
+        usage();
+        return Err(NiriError::InvalidArgument(
+            "protocol-serve requires explicit --confirm".into(),
+        ));
+    }
+    let listen = option(args, "--listen").unwrap_or("127.0.0.1:0");
+    let address: SocketAddr = listen
+        .parse()
+        .map_err(|_| NiriError::InvalidArgument("--listen must be an IP:port address".into()))?;
+    if !address.ip().is_loopback() && !args.contains(&"--allow-remote") {
+        return Err(NiriError::InvalidArgument(
+            "refusing a non-loopback control listener without --allow-remote".into(),
+        ));
+    }
+    let secret = match option(args, "--secret-hex") {
+        Some(value) => protocol::PairingSecret::from_hex(value).map_err(|error| {
+            NiriError::InvalidArgument(format!("invalid --secret-hex: {error}"))
+        })?,
+        None => protocol::PairingSecret::generate().map_err(|error| {
+            NiriError::Unavailable(format!("cannot generate pairing secret: {error}"))
+        })?,
+    };
+    let (server, offer) = vista_host::transport::HostControlServer::bind(
+        address,
+        secret.clone(),
+        protocol::unix_now(),
+    )
+    .map_err(|error| NiriError::Unavailable(format!("cannot bind control listener: {error}")))?;
+    let invite = serde_json::json!({
+        "protocol": "1.0",
+        "address": offer.address.to_string(),
+        "pairing_id": offer.pairing_id.clone(),
+        "secret_hex": secret.to_hex(),
+        "expires_at": offer.expires_at,
+    });
+    if json {
+        println!("{}", serde_json::to_string(&invite)?);
+        io::stdout().flush()?;
+    } else {
+        println!(
+            "Vista control listener on {} (pairing id {}, offer expires at {}).",
+            offer.address, offer.pairing_id, offer.expires_at
+        );
+        println!("Pairing secret (out of band): {}", secret.to_hex());
+        io::stdout().flush()?;
+    }
+    let stats = server
+        .accept_and_run()
+        .map_err(|error| NiriError::Unavailable(format!("control session failed: {error}")))?;
+    if json {
+        println!("{}", serde_json::to_string(&stats)?);
+    } else {
+        println!(
+            "Encrypted control session: {} handshake frames, {} encrypted records, {} keyframe request(s), pong sent={}.",
+            stats.handshake_frames,
+            stats.encrypted_records,
+            stats.keyframe_requests,
+            stats.pong_sent
+        );
+    }
+    Ok(())
+}
+
+fn protocol_client(args: &[&str], json: bool) -> Result<(), NiriError> {
+    check_known_arguments(args, &["--connect", "--secret-hex"], &[])?;
+    let connect = option(args, "--connect")
+        .ok_or_else(|| NiriError::InvalidArgument("protocol-client requires --connect".into()))?;
+    let address: SocketAddr = connect
+        .parse()
+        .map_err(|_| NiriError::InvalidArgument("--connect must be an IP:port address".into()))?;
+    let secret_hex = option(args, "--secret-hex").ok_or_else(|| {
+        NiriError::InvalidArgument("protocol-client requires --secret-hex".into())
+    })?;
+    let secret = protocol::PairingSecret::from_hex(secret_hex)
+        .map_err(|error| NiriError::InvalidArgument(format!("invalid --secret-hex: {error}")))?;
+    let stats = vista_host::transport::connect(address, secret)
+        .map_err(|error| NiriError::Unavailable(format!("control client failed: {error}")))?;
+    let verified = stats.reached_active && stats.pong_verified;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "protocol": "1.0",
+                "address": address.to_string(),
+                "verified": verified,
+                "stats": stats,
+            }))?
+        );
+    } else {
+        println!(
+            "Control client connected to {}: active={}, pong verified={}, {} handshake frames, {} encrypted writes / {} reads.",
+            address,
+            stats.reached_active,
+            stats.pong_verified,
+            stats.handshake_frames,
+            stats.encrypted_writes,
+            stats.encrypted_reads
+        );
     }
     Ok(())
 }

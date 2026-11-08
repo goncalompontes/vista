@@ -19,7 +19,7 @@ use serde::Serialize;
 use std::{
     fmt,
     io::{self, Read, Write},
-    net::{TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener, TcpStream},
     thread,
     time::{Duration, Instant},
 };
@@ -239,36 +239,94 @@ impl Connection {
     }
 }
 
-#[derive(Debug, Default)]
-struct ServerStats {
-    handshake_frames: usize,
-    encrypted_records: usize,
-    keyframe_requests: u64,
-    pong_sent: bool,
+#[derive(Debug, Default, Serialize)]
+pub struct ServerStats {
+    pub handshake_frames: usize,
+    pub encrypted_records: usize,
+    pub keyframe_requests: u64,
+    pub pong_sent: bool,
 }
 
-#[derive(Debug, Default)]
-struct ClientStats {
-    handshake_frames: usize,
-    encrypted_writes: usize,
-    encrypted_reads: usize,
-    pong_verified: bool,
-    reached_active: bool,
+#[derive(Debug, Default, Serialize)]
+pub struct ClientStats {
+    pub handshake_frames: usize,
+    pub encrypted_writes: usize,
+    pub encrypted_reads: usize,
+    pub pong_verified: bool,
+    pub reached_active: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ServerOffer {
+    pub address: SocketAddr,
+    pub pairing_id: String,
+    pub expires_at: u64,
+}
+
+/// One-shot control listener. It owns a host pairing state and accepts at most
+/// one client. This is a control-plane server, not a media or discovery server.
+pub struct HostControlServer {
+    listener: TcpListener,
+    host: HostSession,
+    now_secs: u64,
+}
+
+impl HostControlServer {
+    pub fn bind(
+        address: SocketAddr,
+        secret: PairingSecret,
+        now_secs: u64,
+    ) -> Result<(Self, ServerOffer), TransportError> {
+        let listener = TcpListener::bind(address)?;
+        listener.set_nonblocking(true)?;
+        let host = HostSession::new(
+            "vista-host",
+            "Vista host",
+            secret,
+            PermissionSet::video_only(),
+            now_secs,
+        )?;
+        let offer = ServerOffer {
+            address: listener.local_addr()?,
+            pairing_id: host.pairing_id().to_string(),
+            expires_at: host.expires_at(),
+        };
+        Ok((
+            Self {
+                listener,
+                host,
+                now_secs,
+            },
+            offer,
+        ))
+    }
+
+    pub fn accept_and_run(self) -> Result<ServerStats, TransportError> {
+        let deadline = Instant::now() + SERVER_ACCEPT_TIMEOUT;
+        loop {
+            match self.listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false)?;
+                    return serve(stream, self.host, self.now_secs);
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Err(TransportError::Timeout);
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => return Err(TransportError::Io(error)),
+            }
+        }
+    }
 }
 
 fn serve(
     stream: TcpStream,
-    secret: PairingSecret,
+    mut host: HostSession,
     now_secs: u64,
 ) -> Result<ServerStats, TransportError> {
     let mut connection = Connection::new(stream)?;
-    let mut host = HostSession::new(
-        "vista-loopback-host",
-        "Vista loopback host",
-        secret,
-        PermissionSet::video_only(),
-        now_secs,
-    )?;
     let mut stats = ServerStats::default();
 
     while host.state() != HostState::Active {
@@ -332,16 +390,13 @@ fn serve(
     Ok(stats)
 }
 
-fn connect_and_verify(
-    address: std::net::SocketAddr,
-    secret: PairingSecret,
-    now_secs: u64,
-) -> Result<ClientStats, TransportError> {
+/// Connects to a one-shot host, performs the full pairing and opens a
+/// video-only session with an encrypted KeyframeRequest and Ping/Pong.
+pub fn connect(address: SocketAddr, secret: PairingSecret) -> Result<ClientStats, TransportError> {
     let stream = TcpStream::connect_timeout(&address, IO_TIMEOUT)?;
     let mut connection = Connection::new(stream)?;
-    let mut client = ClientSession::new(secret, "vista-loopback-client")?;
+    let mut client = ClientSession::new(secret, "vista-client")?;
     let mut stats = ClientStats::default();
-    let _ = now_secs;
 
     connection.write_envelope(&client.hello()?)?;
     stats.handshake_frames += 1;
@@ -403,33 +458,16 @@ pub struct LoopbackReport {
 /// Runs a real TCP loopback pairing and an encrypted control exchange. This is
 /// local-only and never binds a public interface.
 pub fn protocol_loopback() -> Result<LoopbackReport, TransportError> {
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let address = listener.local_addr()?;
-    listener.set_nonblocking(true)?;
     let secret = PairingSecret::generate()?;
     let now_secs = unix_now();
-    let server_secret = secret.clone();
-    let server = thread::spawn(move || -> Result<ServerStats, TransportError> {
-        let deadline = Instant::now() + SERVER_ACCEPT_TIMEOUT;
-        loop {
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    stream.set_nonblocking(false)?;
-                    return serve(stream, server_secret, now_secs);
-                }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        return Err(TransportError::Timeout);
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) => return Err(TransportError::Io(error)),
-            }
-        }
-    });
-
-    let client_result = connect_and_verify(address, secret, now_secs);
-    let server_result = server
+    let (server, offer) = HostControlServer::bind(
+        "127.0.0.1:0".parse().expect("loopback address"),
+        secret.clone(),
+        now_secs,
+    )?;
+    let handle = thread::spawn(move || server.accept_and_run());
+    let client_result = connect(offer.address, secret);
+    let server_result = handle
         .join()
         .map_err(|_| TransportError::Server("server thread panicked".into()))?;
     let client = client_result?;
@@ -439,7 +477,7 @@ pub fn protocol_loopback() -> Result<LoopbackReport, TransportError> {
         && server.pong_sent
         && server.keyframe_requests == 1;
     Ok(LoopbackReport {
-        address: address.to_string(),
+        address: offer.address.to_string(),
         protocol: PROTOCOL_VERSION.to_string(),
         handshake_frames: server.handshake_frames,
         server_encrypted_records: server.encrypted_records,

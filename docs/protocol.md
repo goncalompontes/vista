@@ -176,6 +176,17 @@ It is a local diagnostic only. It is **not** TLS/QUIC/WebRTC, does not hide
 metadata or packet sizes, has no congestion control, reconnect logic or
 discovery, and must not be exposed to an untrusted network in this form.
 
+For a two-process check, `vista-host protocol-serve --confirm [--listen ADDR]`
+starts a one-shot control listener. It prints a JSON offer with the bound
+address, pairing id, expiry and the out-of-band secret, accepts exactly one
+client, runs the same pairing and encrypted session, prints the server stats
+and exits. It binds `127.0.0.1` by default and refuses a non-loopback address
+unless `--allow-remote` is passed explicitly. `vista-host protocol-client
+--connect ADDR --secret-hex HEX` is a reference client that performs the
+pairing and an encrypted `KeyframeRequest`/`Ping` exchange. Neither command
+captures or streams media; the secret printed by the server is the
+QR-equivalent pairing material and must be treated as sensitive.
+
 ## Sessions and permissions
 
 Every capability defaults to denied:
