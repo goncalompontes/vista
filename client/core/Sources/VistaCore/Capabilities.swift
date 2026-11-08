@@ -68,6 +68,28 @@ public struct CapabilityAction: Codable, Equatable, Sendable {
         case suggestedBindings = "suggested_bindings"
     }
 
+    public init(
+        id: String,
+        schemaVersion: UInt16,
+        supported: Bool,
+        enabled: Bool,
+        reason: String?,
+        authorization: AuthorizationState,
+        parameters: String,
+        presentation: ActionPresentation,
+        suggestedBindings: [String]
+    ) {
+        self.id = id
+        self.schemaVersion = schemaVersion
+        self.supported = supported
+        self.enabled = enabled
+        self.reason = reason
+        self.authorization = authorization
+        self.parameters = parameters
+        self.presentation = presentation
+        self.suggestedBindings = suggestedBindings
+    }
+
     /// A client may only offer a control when the backend supports it, it is
     /// currently meaningful, and permission is already granted.
     public var isSelectable: Bool {
@@ -96,6 +118,28 @@ public struct CapabilitySnapshot: Codable, Equatable, Sendable {
         case capabilityRevision = "capability_revision"
         case grantEpoch = "grant_epoch"
         case actions
+    }
+
+    public init(
+        v: UInt16,
+        messageType: String,
+        connectionEpoch: String,
+        sessionId: String?,
+        targetId: String,
+        targetGeneration: String,
+        capabilityRevision: UInt64,
+        grantEpoch: String,
+        actions: [CapabilityAction]
+    ) {
+        self.v = v
+        self.messageType = messageType
+        self.connectionEpoch = connectionEpoch
+        self.sessionId = sessionId
+        self.targetId = targetId
+        self.targetGeneration = targetGeneration
+        self.capabilityRevision = capabilityRevision
+        self.grantEpoch = grantEpoch
+        self.actions = actions
     }
 
     public func action(id: String) -> CapabilityAction? {
@@ -206,12 +250,25 @@ public struct MenuItem: Codable, Equatable, Sendable {
     public let checked: Bool?
     public let children: [MenuItem]
 
+    enum CodingKeys: String, CodingKey {
+        case id, label, enabled, checked, children
+    }
+
     public init(id: String, label: String, enabled: Bool, checked: Bool? = nil, children: [MenuItem] = []) {
         self.id = id
         self.label = label
         self.enabled = enabled
         self.checked = checked
         self.children = children
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        label = try container.decode(String.self, forKey: .label)
+        enabled = try container.decode(Bool.self, forKey: .enabled)
+        checked = try container.decodeIfPresent(Bool.self, forKey: .checked)
+        children = try container.decodeIfPresent([MenuItem].self, forKey: .children) ?? []
     }
 }
 

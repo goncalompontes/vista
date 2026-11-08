@@ -20,4 +20,64 @@ public enum DemoCatalog {
             symbolName: "music.note", source: .independentSession
         )
     ]
+
+    /// Explicitly fictional capability set for the SwiftUI shell. Every action
+    /// is non-selectable so the preview cannot imply a host grant or a working
+    /// native action.
+    public static let capabilitySnapshot = CapabilitySnapshot(
+        v: 1,
+        messageType: "capabilities.snapshot",
+        connectionEpoch: "demo",
+        sessionId: "demo",
+        targetId: "w5",
+        targetGeneration: "niri-demo-w5",
+        capabilityRevision: 1,
+        grantEpoch: "demo",
+        actions: [
+            CapabilityAction(
+                id: "window.focus",
+                schemaVersion: 1,
+                supported: true,
+                enabled: true,
+                reason: nil,
+                authorization: .required,
+                parameters: "vista.empty.v1",
+                presentation: ActionPresentation(label: "Focus window"),
+                suggestedBindings: []
+            ),
+            CapabilityAction(
+                id: "window.maximize.set",
+                schemaVersion: 1,
+                supported: false,
+                enabled: false,
+                reason: "Niri exposes fullscreen, not maximize",
+                authorization: .required,
+                parameters: "vista.window.maximize.set.v1",
+                presentation: ActionPresentation(label: "Maximize"),
+                suggestedBindings: []
+            ),
+            CapabilityAction(
+                id: "desktop.workspace.step",
+                schemaVersion: 1,
+                supported: true,
+                enabled: true,
+                reason: nil,
+                authorization: .required,
+                parameters: "vista.desktop.workspace.step.v1",
+                presentation: ActionPresentation(label: "Switch workspace"),
+                suggestedBindings: ["three_finger_swipe_left"]
+            ),
+            CapabilityAction(
+                id: "edit.copy",
+                schemaVersion: 1,
+                supported: true,
+                enabled: true,
+                reason: "Clipboard grant was not approved",
+                authorization: .denied,
+                parameters: "vista.empty.v1",
+                presentation: ActionPresentation(label: "Copy"),
+                suggestedBindings: []
+            )
+        ]
+    )
 }
