@@ -3,6 +3,7 @@ import SwiftUI
 
 struct WelcomeView: View {
     let onExplore: () -> Void
+    var onPair: () -> Void = {}
 
     var body: some View {
         GeometryReader { geometry in
@@ -59,7 +60,21 @@ struct WelcomeView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(VistaPalette.accent)
 
-                    Text("Preview only · No host connection or streaming yet")
+                    #if !SKIP
+                    Button(action: onPair) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "link")
+                            Text("Pair with a host")
+                        }
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(VistaPalette.accent)
+                    .accessibilityHint("Opens the pairing form for a Vista host")
+                    #endif
+
+                    Text("Pairing only · No catalog or streaming yet")
                         .font(.caption)
                         .foregroundStyle(VistaPalette.subtleText)
                         .multilineTextAlignment(.center)

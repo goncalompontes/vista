@@ -324,8 +324,19 @@ The JSON is intentionally `Codable`-friendly:
   after an authentication, expiry, sequence or permission failure.
 
 See [`docs/fixtures/protocol-v1.json`](fixtures/protocol-v1.json) for the exact
-field names and a complete synthetic exchange. The Rust fixture test decodes
-these frames; a Swift `Codable` test should use the same file.
+field names and a complete synthetic exchange. Rust and Swift tests both decode
+these frames. [`docs/fixtures/pairing-v1.json`](fixtures/pairing-v1.json) pins a
+byte-exact transcript, confirmation tags, HKDF session keys and one media record;
+both languages derive the same values.
+
+`client/core` now implements the v1 control client in Swift: framing, the
+pairing state machine, HMAC-SHA256 confirmations, HKDF-SHA256 session keys and
+the ChaCha20-Poly1305 directional record layer (`ControlProtocol.swift`,
+`ControlPairing.swift`, `SecureControlChannel.swift`). `swift test` covers the
+fixtures, every message round-trip, expiry, wrong secret, sequence gaps and
+permission escalation. The iOS target adds a Network.framework connection and a
+Keychain-backed pairing sheet; it stops at an opened control session (no catalog,
+video or input yet).
 
 ## Capabilities, actions and portable input
 
