@@ -1,0 +1,78 @@
+#if canImport(VideoToolbox) && !SKIP
+import AVFoundation
+import SwiftUI
+import UIKit
+
+/// SwiftUI host for the VideoToolbox-backed sample-buffer layer. It offers a
+/// synthetic self-test so simulator work does not require a live host; a real
+/// host transport will call `controller.receive` with media records.
+struct VideoStreamView: View {
+    @StateObject private var controller = VideoStreamController()
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(VistaPalette.surface)
+
+                VideoLayerView(layer: controller.layer)
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+
+                if controller.framesPresented == 0 {
+                    VStack(spacing: 10) {
+                        VistaSymbol(name: "video.slash", size: 28)
+                        Text(controller.status)
+                            .font(.footnote)
+                            .foregroundStyle(VistaPalette.subtleText)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 20)
+                    }
+                }
+            }
+            .aspectRatio(16.0 / 9.0, contentMode: .fit)
+
+            HStack(spacing: 12) {
+                Button("Run decoder self-test") {
+                    controller.runSyntheticSelfTest()
+                }
+                .buttonStyle(.bordered)
+                .tint(VistaPalette.accent)
+                .accessibilityHint("Encodes synthetic frames locally and feeds the VideoToolbox path")
+
+                if let error = controller.lastError {
+                    Text(error)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                }
+            }
+            .font(.caption)
+        }
+        .onAppear { controller.start() }
+        .onDisappear { controller.stop() }
+    }
+}
+
+private struct VideoLayerView: UIViewRepresentable {
+    let layer: AVSampleBufferDisplayLayer
+
+    func makeUIView(context: Context) -> UIView {
+        let view = LayerHostView()
+        view.backgroundColor = .clear
+        layer.frame = view.bounds
+        view.layer.addSublayer(layer)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        layer.frame = uiView.bounds
+    }
+}
+
+private final class LayerHostView: UIView {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layer.sublayers?.forEach { $0.frame = bounds }
+    }
+}
+#endif
