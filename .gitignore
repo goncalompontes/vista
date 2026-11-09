@@ -9,3 +9,5 @@
 /client/ios/.build/
 /client/ios/.swiftpm/
 /client/ios/xtool/
+/client/ios/.bsp/
+/client/android/.bsp/
