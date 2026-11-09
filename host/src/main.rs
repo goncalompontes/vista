@@ -27,10 +27,11 @@ fn usage() {
         "       vista-host media-stream --serve [--listen ADDR] [--frames N] | --connect ADDR --key-hex HEX --session-id ID [--json]"
     );
     eprintln!("       vista-host keyframe-control-test [--json]");
-    eprintln!("       vista-host capture-h264 --confirm [--json]");
+    eprintln!("       vista-host capture-h264 --confirm [--window ID] [--json]");
     eprintln!("       vista-host capture-output --confirm [--json]");
     eprintln!("       vista-host pipewire-loopback [--json]");
     eprintln!("       vista-host capability-test [--json]");
+    eprintln!("       vista-host lifecycle-test [--json]");
     eprintln!("       vista-host control-dispatch-test [--json]");
     eprintln!("       vista-host protocol-test [--json]");
     eprintln!("       vista-host protocol-loopback [--json]");
@@ -353,6 +354,48 @@ fn run() -> Result<(), NiriError> {
                 println!("Arbitrary Niri window-ID capture remains unverified.");
             }
         }
+        [command, confirm, flag, id]
+            if command.as_str() == "capture-h264"
+                && confirm.as_str() == "--confirm"
+                && flag.as_str() == "--window" =>
+        {
+            let window_id = id
+                .parse::<u64>()
+                .map_err(|_| NiriError::InvalidArgument("--window must be an integer".into()))?;
+            eprintln!(
+                "Vista will request one window and briefly encode its frames in memory. No video is saved or transmitted; permissions are not persisted."
+            );
+            eprintln!(
+                "Watching Niri window {window_id}; removal or a compositor restart terminates capture."
+            );
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let report = runtime
+                .block_on(vista_host::live::capture_h264_probe_for_window(Some(
+                    window_id,
+                )))
+                .map_err(|err| {
+                    NiriError::Unavailable(format!(
+                        "ScreenCast H.264 diagnostic failed or was cancelled: {err}"
+                    ))
+                })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Encoded {} selected-window frames into {} H.264 buffers ({} bytes) in {} ms with {:?}; no pixels were saved or transmitted.",
+                    report.input_frames,
+                    report.encoded_buffers,
+                    report.encoded_bytes,
+                    report.elapsed_ms,
+                    report.encoder
+                );
+                println!(
+                    "Window {window_id} was watched for removal; no pixels were saved or transmitted."
+                );
+            }
+        }
         [command] if command.as_str() == "pipewire-loopback" => {
             eprintln!(
                 "Running a local synthetic PipeWire video-node loopback; no portal consent, window capture or network access."
@@ -568,6 +611,35 @@ fn run() -> Result<(), NiriError> {
                     report.wrong_session_rejected,
                     report.wrong_target_rejected,
                     report.malformed_rejected
+                );
+            }
+        }
+        [command] if command.as_str() == "lifecycle-test" => {
+            eprintln!(
+                "Running the deterministic window lifecycle guard diagnostic; no compositor, capture or input access."
+            );
+            let report = vista_host::lifecycle::diagnostic().map_err(|error| {
+                NiriError::Unavailable(format!("lifecycle guard diagnostic failed: {error}"))
+            })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Lifecycle guard verified={} for window {}: removal={}, missing snapshot={}, portal close={}, permission revoke={}, compositor restart={}.",
+                    report.verified,
+                    report.window_id,
+                    report.removal_terminates,
+                    report.snapshot_missing_terminates,
+                    report.portal_close_terminates,
+                    report.permission_revoke_terminates,
+                    report.compositor_restart_terminates
+                );
+                println!(
+                    "Resize flushes={}, geometry discontinuity={}, closed session={}, idempotent termination={}.",
+                    report.resize_flushes,
+                    report.resize_signals_geometry_discontinuity,
+                    report.terminated_session_is_closed,
+                    report.idempotent_termination
                 );
             }
         }

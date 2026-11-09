@@ -1,6 +1,7 @@
 //! Bounded, explicitly consented PipeWire window → H.264 diagnostic.
 //! Never persists pixels or streams content to a network endpoint.
 use crate::{
+    lifecycle::WindowWatcher,
     media::{H264Encoder, probe_encoders},
     session::{FrameGeometry, H264AccessUnit, H264Discontinuity, SessionToken, StreamSession},
 };
@@ -201,6 +202,7 @@ fn bridge_pipeline(
     encoder: H264Encoder,
     node: u32,
     cancelled: &AtomicBool,
+    watcher: Option<&WindowWatcher>,
 ) -> Result<LiveBridgeReport, String> {
     let target = pipeline(&format!(
         "appsrc name=raw_source is-live=true format=time caps=video/x-raw,format=RGBA,width={WIDTH},height={HEIGHT},framerate=30/1 ! queue max-size-buffers=2 leaky=downstream ! videoconvert ! {} {} ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au ! appsink name=encoded_sink sync=false max-buffers=2 drop=false",
@@ -244,9 +246,9 @@ fn bridge_pipeline(
             height: HEIGHT,
         };
         while input_frames < MAX_FRAMES && Instant::now() < deadline {
-            if cancelled.load(Ordering::Acquire) {
+            if let Some(reason) = interruption(cancelled, watcher) {
                 session.revoke();
-                return Err("portal session closed during capture".into());
+                return Err(reason);
             }
             check_capture_errors(source, &target)?;
             let wait = deadline.saturating_duration_since(Instant::now()).min(POLL);
@@ -257,9 +259,9 @@ fn bridge_pipeline(
                     .enqueue_rgba(token, geometry, frame)
                     .map_err(|e| format!("{e:?}"))?;
                 input_frames += 1;
-                if cancelled.load(Ordering::Acquire) {
+                if let Some(reason) = interruption(cancelled, watcher) {
                     session.revoke();
-                    return Err("portal session closed during capture".into());
+                    return Err(reason);
                 }
                 if let Some(bytes) = session.dequeue(token).map_err(|e| format!("{e:?}"))? {
                     let mut buffer = gst::Buffer::from_mut_slice(bytes);
@@ -286,15 +288,19 @@ fn bridge_pipeline(
             session.revoke();
             return Err("portal session closed during capture".into());
         }
+        if let Some(reason) = interruption(cancelled, watcher) {
+            session.revoke();
+            return Err(reason);
+        }
         check_capture_errors(source, &target)?;
         appsrc
             .end_of_stream()
             .map_err(|e| format!("cannot signal encoder EOS: {e}"))?;
         // The overall deadline also bounds encoder draining.
         while Instant::now() < deadline && !encoded_sink.is_eos() {
-            if cancelled.load(Ordering::Acquire) {
+            if let Some(reason) = interruption(cancelled, watcher) {
                 session.revoke();
-                return Err("portal session closed while encoding".into());
+                return Err(reason);
             }
             check_capture_errors(source, &target)?;
             let wait = deadline.saturating_duration_since(Instant::now()).min(POLL);
@@ -357,12 +363,38 @@ fn bridge_pipeline(
     }
 }
 
-fn run_worker(fd: OwnedFd, node: u32, cancelled: &AtomicBool) -> Result<LiveBridgeReport, String> {
+fn interruption(cancelled: &AtomicBool, watcher: Option<&WindowWatcher>) -> Option<String> {
+    if cancelled.load(Ordering::Acquire) {
+        return Some("portal session closed during capture".into());
+    }
+    if let Some(watcher) = watcher
+        && watcher.is_cancelled()
+    {
+        return Some(format!(
+            "target window lifecycle ended ({})",
+            watcher.reason().unwrap_or("unknown")
+        ));
+    }
+    None
+}
+
+fn run_worker(
+    fd: OwnedFd,
+    node: u32,
+    cancelled: &AtomicBool,
+    window_id: Option<u64>,
+) -> Result<LiveBridgeReport, String> {
     gst::init().map_err(|e| format!("GStreamer initialization: {e}"))?;
     let caps = probe_encoders()?;
     if !caps.h264_parser {
         return Err("h264parse plugin unavailable".into());
     }
+    // The watcher is opt-in; without a Niri window id this diagnostic keeps its
+    // previous portal-closure-only behavior.
+    let watcher = match window_id {
+        Some(id) => Some(WindowWatcher::start(id)?),
+        None => None,
+    };
     // The PipeWire FD remains open for the complete lifetime of the source pipeline.
     let source = pipeline(&format!(
         "pipewiresrc fd={} target-object={node} do-timestamp=true ! videoconvert ! videoscale ! video/x-raw,format=RGBA,width={WIDTH},height={HEIGHT} ! appsink name=raw_sink sync=false max-buffers=2 drop=true",
@@ -380,7 +412,15 @@ fn run_worker(fd: OwnedFd, node: u32, cancelled: &AtomicBool) -> Result<LiveBrid
         if cancelled.load(Ordering::Acquire) {
             return Err("portal session closed before encoding".into());
         }
-        match bridge_pipeline(&source, encoder, node, cancelled) {
+        if let Some(watcher) = watcher.as_ref()
+            && watcher.is_cancelled()
+        {
+            return Err(format!(
+                "target window lifecycle ended ({})",
+                watcher.reason().unwrap_or("unknown")
+            ));
+        }
+        match bridge_pipeline(&source, encoder, node, cancelled, watcher.as_ref()) {
             Ok(report) => return Ok(report),
             Err(err) if cancelled.load(Ordering::Acquire) => return Err(err),
             Err(err) => failures.push(format!("{}: {err}", encoder.element_name())),
@@ -396,6 +436,14 @@ fn run_worker(fd: OwnedFd, node: u32, cancelled: &AtomicBool) -> Result<LiveBrid
 /// The portal chooser selects exactly one window; permission is never persisted.
 /// No encoded video bytes leave this process.
 pub async fn capture_h264_probe() -> Result<LiveBridgeReport, String> {
+    capture_h264_probe_for_window(None).await
+}
+
+/// Same diagnostic, optionally watching one Niri window id so removal or a
+/// compositor restart terminates capture instead of waiting for a timeout.
+pub async fn capture_h264_probe_for_window(
+    window_id: Option<u64>,
+) -> Result<LiveBridgeReport, String> {
     let portal = Screencast::new().await.map_err(|e| e.to_string())?;
     let session = portal
         .create_session(Default::default())
@@ -432,7 +480,8 @@ pub async fn capture_h264_probe() -> Result<LiveBridgeReport, String> {
         let worker_flag = cancelled.clone();
         // Subscribe before starting capture so permission revocation is observed.
         let closed = session.receive_closed().await.map_err(|e| e.to_string())?;
-        let worker = tokio::task::spawn_blocking(move || run_worker(fd, node, &worker_flag));
+        let worker =
+            tokio::task::spawn_blocking(move || run_worker(fd, node, &worker_flag, window_id));
         tokio::pin!(closed);
         tokio::pin!(worker);
         tokio::select! {
@@ -562,7 +611,7 @@ mod tests {
         )
         .unwrap();
         let cancelled = AtomicBool::new(false);
-        let error = bridge_pipeline(&source, encoder, 0, &cancelled).unwrap_err();
+        let error = bridge_pipeline(&source, encoder, 0, &cancelled, None).unwrap_err();
         assert!(error.contains("capture source pipeline error"), "{error}");
         assert_eq!(source.current_state(), gst::State::Null);
     }
@@ -584,7 +633,7 @@ mod tests {
             "videotestsrc num-buffers=8 is-live=true ! videoconvert ! video/x-raw,format=RGBA,width=320,height=180 ! appsink name=raw_sink sync=false max-buffers=2 drop=true"
         ).unwrap();
         let cancelled = AtomicBool::new(false);
-        let result = bridge_pipeline(&source, encoder, 0, &cancelled).unwrap();
+        let result = bridge_pipeline(&source, encoder, 0, &cancelled, None).unwrap();
         assert_eq!(result.input_frames, 8);
         assert!(result.encoded_buffers > 0);
     }
@@ -612,7 +661,7 @@ mod tests {
                 cancelled.store(true, Ordering::Release);
             });
             let start = Instant::now();
-            let error = bridge_pipeline(&source, encoder, 0, &cancelled).unwrap_err();
+            let error = bridge_pipeline(&source, encoder, 0, &cancelled, None).unwrap_err();
             assert!(error.contains("portal session closed"), "{error}");
             assert!(start.elapsed() < Duration::from_secs(2));
         });
@@ -636,7 +685,7 @@ mod tests {
             "videotestsrc num-buffers=8 is-live=true ! videoconvert ! video/x-raw,format=RGBA,width=320,height=180 ! appsink name=raw_sink sync=false max-buffers=2 drop=true"
         ).unwrap();
         let cancelled = AtomicBool::new(true);
-        let error = bridge_pipeline(&source, encoder, 0, &cancelled).unwrap_err();
+        let error = bridge_pipeline(&source, encoder, 0, &cancelled, None).unwrap_err();
         assert!(error.contains("portal session closed"), "{error}");
         assert_eq!(source.current_state(), gst::State::Null);
     }

@@ -11,6 +11,7 @@ pub mod control_dispatch;
 pub mod control_lease;
 pub mod decoder_sync;
 pub mod keyframe_control;
+pub mod lifecycle;
 pub mod live;
 pub mod media;
 pub mod media_stream;
