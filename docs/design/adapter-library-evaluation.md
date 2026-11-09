@@ -30,6 +30,8 @@ Every candidate must be evaluated on: actual capabilities (not README promises),
 | Protocol generation | buf, prost, swift-protobuf, Java/Kotlin protobuf | Binary protobuf with generated models | Select pinned generators and verify Skip compatibility rather than assuming Swift source sharing implies wire sharing. |
 | Transport security | TLS 1.3 + WebRTC DTLS-SRTP | Standard libraries only | Authenticated signaling pins host; bind received SDP DTLS fingerprint to signaling principal. No custom records or key exchange. |
 
+**Governance review:** [ADR 0004](../adr/0004-license-and-niri-ipc-policy.md) recommends Apache-2.0 and Niri public JSON IPC rather than linking the GPL helper, pending owner approval #73. Any earlier typed-crate recommendation in this file is superseded by this candidate.
+
 ## New findings materially affecting the architecture
 
 ### 1. Niri has a documented portable ScreenCast path
