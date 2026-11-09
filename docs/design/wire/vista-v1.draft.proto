@@ -8,7 +8,7 @@ package vista.v1;
 // 16-byte opaque IDs are preferred, and NEVER native compositor/OS identifiers.
 message ProtocolVersion { uint32 major = 1; uint32 minor = 2; }
 message ProtocolRange { ProtocolVersion min = 1; ProtocolVersion max = 2; }
-message Feature { string id = 1; uint32 revision = 2; bool required = 3; }
+message Feature { string id = 1; uint32 revision = 2; bool must_support = 3; }
 message HostRef { bytes identity_fingerprint = 1; }
 message TargetRef {
   bytes id = 1;
