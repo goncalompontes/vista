@@ -18,7 +18,7 @@ Do not assume installed `xdg-desktop-portal` = functioning desktop integration. 
 | GNOME Wayland | optional native adapter or picker-only | GNOME portal backend; verify selected window | test RemoteDesktop/EIS and scope | provider-specific; none by default | same managed session runtime |
 | KDE Plasma Wayland | optional native adapter or picker-only | KDE portal backend; verify selected window | test RemoteDesktop/EIS and scope | provider-specific; none by default | same managed session runtime |
 | wlroots-based desktop (choose sway/hyprland) | optional compositor adapter or picker-only | installed portal backend; verify WINDOW capability | verify RemoteDesktop/EIS availability, not assumed | provider-specific; none by default | same managed session runtime |
-| X11 desktop | **future evaluation only** | do not assume Wayland/portal path applies | different native provider likely | different native provider likely | future |
+| X11 desktop | **later Linux phase (#72)** | verify native X11 or portal source APIs | evaluate XTest/native scope | evaluate EWMH/ICCCM semantics | future |
 
 **No row is verified just because the software claims a feature.** Scope minimum viable experience: an explicitly selected *single window* streamed to iOS with truthful control availability. A desktop with working capture but no input can still offer a clearly labelled view-only session. Desktop-wide capture is a separate explicit mode and consent.
 
@@ -56,6 +56,12 @@ Distinct test phases: (1) non-invasive discovery; (2) interactive, explicit gran
 ## Evidence / definition of support
 
 For every tested environment record: distribution, session type, compositor version, portal frontend/backend(s) and versions, PipeWire, GPU/driver, selected grants, actual provider method, release of permissions/resources, measured stream stability and known limitations. Keep a dated, reproducible result attachment or markdown table and link to GitHub issue(s). Do not maintain a single yes/no `supports Vista` switch.
+
+## Existing maintained implementation to evaluate (not a dependency decision)
+
+[xdg-desktop-portal-generic](https://github.com/lamco-admin/xdg-desktop-portal-generic) is an additional candidate for some Niri/wlroots/Smithay systems. Upstream advertises ScreenCast, RemoteDesktop and Clipboard implemented with ext- or wlr- Wayland protocols and EIS input bridging. Compare its current release/license/build/dependency/security and actual runtime behavior with the desktop's established portal backend before choosing it. A portal backend's ability to fall back to virtual input or uinput must not silently circumvent Vista's scoped input or permission model. Do not replace GNOME/KDE portals by default, infer WINDOW capture from generic claims, or treat README support claims as verified acceptance evidence. Evaluate library reuse in #69 and #70.
+
+X11/Xorg is part of Vista's **Linux adapter design scope** (#72), not a claim of first-release support. It must use the same portable provider contracts with accurate X11 authorization/scope limitations and no Wayland-specific assumptions.
 
 ## Authoritative platform docs
 
