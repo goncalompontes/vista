@@ -1,0 +1,512 @@
+{
+  "$comment": "DESIGN FIXTURES ONLY. Exact field names and reducer implementation to be reconciled with canonical generated v1 schema. Not run against an iOS/Android build.",
+  "fixture_version": 1,
+  "cases": [
+    {
+      "id": "unpaired_discovery",
+      "events": [
+        {
+          "type": "DiscoveredHost",
+          "host_id": "untrusted-host",
+          "endpoint": "local",
+          "name": "Nearby device"
+        }
+      ],
+      "expected": {
+        "host_tile": "untrusted",
+        "show_catalog": false,
+        "actions": [
+          "pair"
+        ],
+        "stream_state": "none"
+      }
+    },
+    {
+      "id": "wrong_host_identity",
+      "events": [
+        {
+          "type": "PairingPending",
+          "host_id": "host-A"
+        },
+        {
+          "type": "PairingRejected",
+          "reason": "HOST_IDENTITY_MISMATCH"
+        }
+      ],
+      "expected": {
+        "connected": false,
+        "show_catalog": false,
+        "warning": "Host identity changed or does not match",
+        "allow_retry_with_old_pin": false
+      }
+    },
+    {
+      "id": "portal_picker_only",
+      "events": [
+        {
+          "type": "HostAuthenticated",
+          "connection_id": "c1"
+        },
+        {
+          "type": "CatalogSnapshot",
+          "revision": 1,
+          "items": []
+        },
+        {
+          "type": "CapabilitySnapshot",
+          "revision": 1,
+          "features": [
+            "capture.picker"
+          ]
+        },
+        {
+          "type": "CaptureApproved",
+          "source_kind": "WINDOW",
+          "verified_catalog_target": null,
+          "stream_target": "p1"
+        },
+        {
+          "type": "MediaFirstFrame",
+          "stream_target": "p1",
+          "generation": 1
+        }
+      ],
+      "expected": {
+        "library_sections": [
+          "Choose Window"
+        ],
+        "source_label": "Selected window on host",
+        "catalog_binding_assumed": false,
+        "stream_state": "live"
+      }
+    },
+    {
+      "id": "view_only",
+      "events": [
+        {
+          "type": "HostAuthenticated",
+          "connection_id": "c1"
+        },
+        {
+          "type": "PermissionChanged",
+          "permission": "video.view",
+          "state": "GRANTED"
+        },
+        {
+          "type": "PermissionChanged",
+          "permission": "input.control",
+          "state": "DENIED"
+        },
+        {
+          "type": "MediaFirstFrame",
+          "target": "t1",
+          "generation": 1
+        }
+      ],
+      "expected": {
+        "stream_status": "Live · View-only",
+        "can_send_input": false,
+        "can_request_control": true,
+        "can_copy_clipboard": false
+      }
+    },
+    {
+      "id": "input_desktop_scope",
+      "events": [
+        {
+          "type": "HostAuthenticated",
+          "connection_id": "c1"
+        },
+        {
+          "type": "PermissionChanged",
+          "permission": "input.control",
+          "state": "GRANTED",
+          "scope": "SHARED_DESKTOP"
+        },
+        {
+          "type": "LeaseAcquired",
+          "target": "t1",
+          "lease_id": "l1"
+        }
+      ],
+      "expected": {
+        "input_scope_label": "Controls shared desktop",
+        "private_window_claim": false,
+        "can_send_input": true
+      }
+    },
+    {
+      "id": "lease_revoked",
+      "events": [
+        {
+          "type": "LeaseAcquired",
+          "target": "t1",
+          "lease_id": "l1"
+        },
+        {
+          "type": "LeaseRevoked",
+          "lease_id": "l1"
+        }
+      ],
+      "expected": {
+        "can_send_input": false,
+        "release_all_requested": true,
+        "control_state": "view_only"
+      }
+    },
+    {
+      "id": "capability_removed",
+      "events": [
+        {
+          "type": "CapabilitySnapshot",
+          "revision": 4,
+          "actions": [
+            "host.workspace.next"
+          ]
+        },
+        {
+          "type": "CapabilityDelta",
+          "base_revision": 4,
+          "revision": 5,
+          "removed": [
+            "host.workspace.next"
+          ]
+        }
+      ],
+      "expected": {
+        "show_workspace_action": false,
+        "emit_action_request": false
+      }
+    },
+    {
+      "id": "revision_gap",
+      "events": [
+        {
+          "type": "CatalogSnapshot",
+          "revision": 10,
+          "items": [
+            "t1"
+          ]
+        },
+        {
+          "type": "CatalogDelta",
+          "base_revision": 12,
+          "revision": 13,
+          "upsert": [
+            "t2"
+          ]
+        }
+      ],
+      "expected": {
+        "catalog_revision": 10,
+        "resync_requested": true,
+        "no_partial_t2": true
+      }
+    },
+    {
+      "id": "stale_target_response",
+      "events": [
+        {
+          "type": "ActionResult",
+          "target": "t1",
+          "generation": 3,
+          "status": "success"
+        },
+        {
+          "type": "TargetClosed",
+          "target": "t1",
+          "generation": 3
+        },
+        {
+          "type": "ActionResult",
+          "target": "t1",
+          "generation": 3,
+          "status": "success"
+        }
+      ],
+      "expected": {
+        "target_closed": true,
+        "not_resurrected": true
+      }
+    },
+    {
+      "id": "window_capture_rejected_monitor",
+      "events": [
+        {
+          "type": "CaptureRequest",
+          "requested_kind": "WINDOW"
+        },
+        {
+          "type": "CaptureRejected",
+          "actual_kind": "MONITOR",
+          "code": "SCOPE_MISMATCH"
+        }
+      ],
+      "expected": {
+        "stream_state": "none",
+        "monitor_fallback": false,
+        "explanation_visible": true
+      }
+    },
+    {
+      "id": "media_connected_no_frame",
+      "events": [
+        {
+          "type": "HostAuthenticated",
+          "connection_id": "c1"
+        },
+        {
+          "type": "RtcConnected",
+          "connection_id": "c1"
+        }
+      ],
+      "expected": {
+        "stream_state": "waiting_for_first_frame",
+        "live_badge": false
+      }
+    },
+    {
+      "id": "decoder_waiting_keyframe",
+      "events": [
+        {
+          "type": "MediaFirstFrame",
+          "connection_id": "c1",
+          "generation": 1
+        },
+        {
+          "type": "DecoderWaitingKeyframe",
+          "connection_id": "c1",
+          "generation": 2
+        }
+      ],
+      "expected": {
+        "stream_state": "recovering",
+        "live_badge": false,
+        "keyframe_request_allowed": true
+      }
+    },
+    {
+      "id": "disconnect_stops_input",
+      "events": [
+        {
+          "type": "LeaseAcquired",
+          "lease_id": "l1"
+        },
+        {
+          "type": "PhysicalKeyDown",
+          "usage": 4
+        },
+        {
+          "type": "ConnectionLost",
+          "connection_id": "c1"
+        }
+      ],
+      "expected": {
+        "can_send_input": false,
+        "release_all_requested": true,
+        "media_state": "disconnected_or_frozen_labeled"
+      }
+    },
+    {
+      "id": "reconnect_clears_old_action",
+      "events": [
+        {
+          "type": "ActionPending",
+          "request_id": "r1",
+          "connection_id": "c1"
+        },
+        {
+          "type": "ReconnectAuthorized",
+          "connection_id": "c2"
+        },
+        {
+          "type": "ActionResult",
+          "request_id": "r1",
+          "connection_id": "c1",
+          "status": "success"
+        }
+      ],
+      "expected": {
+        "pending_action_replayed": false,
+        "ignored_stale_response": true,
+        "needs_fresh_snapshots": true
+      }
+    },
+    {
+      "id": "clipboard_grants_independent",
+      "events": [
+        {
+          "type": "PermissionChanged",
+          "permission": "clipboard.read",
+          "state": "GRANTED"
+        },
+        {
+          "type": "PermissionChanged",
+          "permission": "clipboard.write",
+          "state": "DENIED"
+        }
+      ],
+      "expected": {
+        "can_remote_to_local_paste": true,
+        "can_local_to_remote_paste": false,
+        "auto_clipboard_sync": false
+      }
+    },
+    {
+      "id": "managed_session_crash",
+      "events": [
+        {
+          "type": "SessionUpdate",
+          "session_id": "s1",
+          "state": "ACTIVE"
+        },
+        {
+          "type": "SessionUpdate",
+          "session_id": "s1",
+          "state": "FAILED"
+        }
+      ],
+      "expected": {
+        "stream_state": "closed",
+        "stop_input": true,
+        "show_failure_and_recovery": true,
+        "host_desktop_unaffected_claim_requires_validation": true
+      }
+    },
+    {
+      "id": "backgrounds_during_control",
+      "events": [
+        {
+          "type": "LeaseAcquired",
+          "lease_id": "l1"
+        },
+        {
+          "type": "AppBackgrounded"
+        }
+      ],
+      "expected": {
+        "can_send_input": false,
+        "release_all_requested": true,
+        "no_auto_regrant": true
+      }
+    },
+    {
+      "id": "geometry_stale",
+      "events": [
+        {
+          "type": "GeometryChanged",
+          "epoch": 6
+        },
+        {
+          "type": "TouchAt",
+          "epoch": 5,
+          "x": 0.5,
+          "y": 0.5
+        }
+      ],
+      "expected": {
+        "input_event_emitted": false,
+        "request_latest_mapping": true
+      }
+    },
+    {
+      "id": "outside_letterboxed_video",
+      "events": [
+        {
+          "type": "TouchAt",
+          "video_rect": [
+            100,
+            20,
+            800,
+            450
+          ],
+          "point": [
+            20,
+            300
+          ]
+        }
+      ],
+      "expected": {
+        "input_event_emitted": false,
+        "clamp_to_nearest_edge": false
+      }
+    },
+    {
+      "id": "unknown_host_action",
+      "events": [
+        {
+          "type": "CapabilitySnapshot",
+          "revision": 2,
+          "actions": [
+            "vendor.new_action"
+          ]
+        }
+      ],
+      "expected": {
+        "guess_native_shortcut": false,
+        "unsafe_default_invocation": false,
+        "optional_descriptor_rendering_policy": "hide_or_disable"
+      }
+    },
+    {
+      "id": "user_cancelled_consent",
+      "events": [
+        {
+          "type": "CaptureChooserOpened"
+        },
+        {
+          "type": "ConsentCancelled"
+        }
+      ],
+      "expected": {
+        "no_media": true,
+        "no_automatic_retry": true,
+        "no_monitor_fallback": true
+      }
+    },
+    {
+      "id": "remote_touch_unsupported",
+      "events": [
+        {
+          "type": "CapabilitySnapshot",
+          "revision": 2,
+          "features": [
+            "input.pointer"
+          ],
+          "unsupported": [
+            "input.touch"
+          ]
+        },
+        {
+          "type": "ChangeInputMode",
+          "mode": "direct_touch"
+        }
+      ],
+      "expected": {
+        "allow_direct_touch": false,
+        "fallback_to_pointer_with_explicit_explanation": true
+      }
+    },
+    {
+      "id": "screen_resize_new_epoch",
+      "events": [
+        {
+          "type": "MediaFirstFrame",
+          "geometry_epoch": 2
+        },
+        {
+          "type": "GeometryChanged",
+          "geometry_epoch": 3
+        },
+        {
+          "type": "AbsoluteTap",
+          "geometry_epoch": 2
+        }
+      ],
+      "expected": {
+        "absolute_input_paused": true,
+        "request_reprojection": true
+      }
+    }
+  ]
+}
