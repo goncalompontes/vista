@@ -10,13 +10,21 @@
 //! is **not** TLS/QUIC/WebRTC, does not protect metadata, has no discovery and
 //! is not externally audited. Production transport remains a separate step.
 
+use crate::capability::{
+    ActionBackend, ActionGrants, ActionRegistry, ActionRequest, ActionStatus, InputPermissions,
+    TargetRef,
+};
+use crate::control_dispatch::HostControlChannel;
+use crate::control_lease::ControlLease;
 use crate::protocol::{
     ClientSession, ControlMessage, Envelope, HostSession, HostState, MAX_CONTROL_FRAME_BYTES,
     PROTOCOL_VERSION, PairingSecret, PermissionSet, ProtocolError, SessionKeys, unix_now,
 };
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use serde::Serialize;
+use serde_json::Value;
 use std::{
+    collections::BTreeMap,
     fmt,
     io::{self, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
@@ -56,6 +64,7 @@ pub enum TransportError {
     CounterExhausted,
     PairingState,
     Server(String),
+    Control(String),
     Timeout,
 }
 
@@ -70,6 +79,7 @@ impl fmt::Display for TransportError {
             Self::CounterExhausted => formatter.write_str("record nonce counter exhausted"),
             Self::PairingState => formatter.write_str("session keys are not available"),
             Self::Server(reason) => write!(formatter, "server error: {reason}"),
+            Self::Control(reason) => write!(formatter, "control policy error: {reason}"),
             Self::Timeout => formatter.write_str("transport timed out"),
         }
     }
@@ -260,6 +270,9 @@ pub struct ServerStats {
     pub encrypted_records: usize,
     pub keyframe_requests: u64,
     pub pong_sent: bool,
+    pub control_snapshot_sent: bool,
+    pub action_results: usize,
+    pub actions_completed: usize,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -278,12 +291,82 @@ pub struct ServerOffer {
     pub expires_at: u64,
 }
 
+/// Opt-in capability/action policy for one listener session. The target and
+/// grants are fixed when the listener starts; the control lease is created with
+/// the pairing-assigned session id once the client reaches `SessionOpened`.
+pub struct ControlSetup {
+    pub target: TargetRef,
+    pub grants: ActionGrants,
+    pub input_permissions: InputPermissions,
+    pub capability_revision: u64,
+    pub backend: Box<dyn ActionBackend + Send>,
+}
+
+impl ControlSetup {
+    pub fn new(
+        target: TargetRef,
+        grants: ActionGrants,
+        input_permissions: InputPermissions,
+        capability_revision: u64,
+        backend: Box<dyn ActionBackend + Send>,
+    ) -> Self {
+        Self {
+            target,
+            grants,
+            input_permissions,
+            capability_revision,
+            backend,
+        }
+    }
+}
+
+/// One semantic action a `connect_control` client sends after reading the
+/// snapshot. Parameters are bounded by the contract before they are sent.
+#[derive(Clone, Debug)]
+pub struct ControlAction {
+    pub id: String,
+    pub action: String,
+    pub schema_version: u16,
+    pub parameters: BTreeMap<String, Value>,
+}
+
+impl ControlAction {
+    pub fn new(id: impl Into<String>, action: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            action: action.into(),
+            schema_version: 1,
+            parameters: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_parameters(mut self, parameters: BTreeMap<String, Value>) -> Self {
+        self.parameters = parameters;
+        self
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ControlClientStats {
+    pub reached_active: bool,
+    pub snapshot_received: bool,
+    pub snapshot_actions: usize,
+    pub grant_epoch: String,
+    pub action_result_received: bool,
+    pub action_status: Option<ActionStatus>,
+    pub action_error: Option<crate::capability::ContractErrorCode>,
+    pub action_state: Option<Value>,
+    pub encrypted_writes: usize,
+    pub encrypted_reads: usize,
+}
+
 /// One-shot control listener. It owns a host pairing state and accepts at most
 /// one client. This is a control-plane server, not a media or discovery server.
 pub struct HostControlServer {
     listener: TcpListener,
     host: HostSession,
     now_secs: u64,
+    control: Option<ControlSetup>,
 }
 
 impl HostControlServer {
@@ -292,15 +375,30 @@ impl HostControlServer {
         secret: PairingSecret,
         now_secs: u64,
     ) -> Result<(Self, ServerOffer), TransportError> {
+        Self::bind_with_control(address, secret, now_secs, PermissionSet::video_only(), None)
+    }
+
+    /// Bind a listener with an explicit session permission policy and optional
+    /// capability/action dispatcher. `policy` must contain every permission the
+    /// client may request; a `ControlSetup` with input permissions requires the
+    /// input permission in `policy`.
+    pub fn bind_with_control(
+        address: SocketAddr,
+        secret: PairingSecret,
+        now_secs: u64,
+        policy: PermissionSet,
+        control: Option<ControlSetup>,
+    ) -> Result<(Self, ServerOffer), TransportError> {
+        if let Some(setup) = &control
+            && (setup.capability_revision == 0)
+        {
+            return Err(TransportError::Control(
+                "capability revision must be non-zero".into(),
+            ));
+        }
         let listener = TcpListener::bind(address)?;
         listener.set_nonblocking(true)?;
-        let host = HostSession::new(
-            "vista-host",
-            "Vista host",
-            secret,
-            PermissionSet::video_only(),
-            now_secs,
-        )?;
+        let host = HostSession::new("vista-host", "Vista host", secret, policy, now_secs)?;
         let offer = ServerOffer {
             address: listener.local_addr()?,
             pairing_id: host.pairing_id().to_string(),
@@ -311,6 +409,7 @@ impl HostControlServer {
                 listener,
                 host,
                 now_secs,
+                control,
             },
             offer,
         ))
@@ -331,7 +430,7 @@ impl HostControlServer {
             match self.listener.accept() {
                 Ok((stream, _)) => {
                     stream.set_nonblocking(false)?;
-                    return serve(stream, self.host, self.now_secs, &mut hook);
+                    return serve(stream, self.host, self.now_secs, self.control, &mut hook);
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
@@ -349,6 +448,7 @@ fn serve<F>(
     stream: TcpStream,
     mut host: HostSession,
     now_secs: u64,
+    control: Option<ControlSetup>,
     hook: &mut F,
 ) -> Result<ServerStats, TransportError>
 where
@@ -386,6 +486,32 @@ where
         }
     }
 
+    if let Some(setup) = control {
+        let session_id = host
+            .session_id()
+            .ok_or(TransportError::PairingState)?
+            .to_string();
+        let lease = ControlLease::grant(
+            &session_id,
+            Some(session_id.clone()),
+            setup.target,
+            setup.grants,
+            setup.input_permissions,
+        )
+        .map_err(|error| TransportError::Control(error.to_string()))?;
+        let channel = HostControlChannel::new(
+            ActionRegistry::new(setup.backend),
+            lease,
+            setup.capability_revision,
+        )
+        .map_err(|error| TransportError::Control(error.to_string()))?;
+        host.attach_control(channel)?;
+        if let Some(snapshot) = host.control_snapshot()? {
+            connection.write_envelope(&snapshot)?;
+            stats.control_snapshot_sent = true;
+        }
+    }
+
     for _ in 0..MAX_ACTIVE_RECORDS {
         let envelope = match connection.read_envelope() {
             Ok(envelope) => envelope,
@@ -411,8 +537,15 @@ where
             hook();
         }
         if let Some(response) = response {
-            if matches!(&response.body, ControlMessage::Pong { .. }) {
-                stats.pong_sent = true;
+            match &response.body {
+                ControlMessage::Pong { .. } => stats.pong_sent = true,
+                ControlMessage::ActionResult { status, .. } => {
+                    stats.action_results += 1;
+                    if *status == ActionStatus::Completed {
+                        stats.actions_completed += 1;
+                    }
+                }
+                _ => {}
             }
             connection.write_envelope(&response)?;
         }
@@ -420,13 +553,25 @@ where
             break;
         }
     }
+    if let Some(control) = host.control_mut() {
+        control.revoke();
+    }
     stats.keyframe_requests = host.keyframe_requests();
     Ok(stats)
 }
 
-/// Connects to a one-shot host, performs the full pairing and opens a
-/// video-only session with an encrypted KeyframeRequest and Ping/Pong.
-pub fn connect(address: SocketAddr, secret: PairingSecret) -> Result<ClientStats, TransportError> {
+/// A client that has completed pairing and opened its requested session.
+struct OpenedClient {
+    connection: Connection,
+    client: ClientSession,
+    stats: ClientStats,
+}
+
+fn pair_and_open(
+    address: SocketAddr,
+    secret: PairingSecret,
+    permissions: PermissionSet,
+) -> Result<OpenedClient, TransportError> {
     let stream = TcpStream::connect_timeout(&address, IO_TIMEOUT)?;
     let mut connection = Connection::new(stream)?;
     let mut client = ClientSession::new(secret, "vista-client")?;
@@ -454,13 +599,28 @@ pub fn connect(address: SocketAddr, secret: PairingSecret) -> Result<ClientStats
         RecordCipher::new(keys.client_to_host(), &session_id, Direction::ClientToHost)?,
     );
 
-    let open = client.open_session(PermissionSet::video_only())?;
+    let open = client.open_session(permissions)?;
     connection.write_envelope(&open)?;
     stats.encrypted_writes += 1;
     let opened = connection.read_envelope()?;
     stats.encrypted_reads += 1;
     client.accept_session_opened(&opened)?;
     stats.reached_active = true;
+    Ok(OpenedClient {
+        connection,
+        client,
+        stats,
+    })
+}
+
+/// Connects to a one-shot host, performs the full pairing and opens a
+/// video-only session with an encrypted KeyframeRequest and Ping/Pong.
+pub fn connect(address: SocketAddr, secret: PairingSecret) -> Result<ClientStats, TransportError> {
+    let OpenedClient {
+        mut connection,
+        mut client,
+        mut stats,
+    } = pair_and_open(address, secret, PermissionSet::video_only())?;
 
     connection.write_envelope(&client.keyframe_request()?)?;
     stats.encrypted_writes += 1;
@@ -474,6 +634,72 @@ pub fn connect(address: SocketAddr, secret: PairingSecret) -> Result<ClientStats
     connection.write_envelope(&client.session_close("loopback complete")?)?;
     stats.encrypted_writes += 1;
     Ok(stats)
+}
+
+/// Connect, read the host's grant-scoped capability snapshot, send one semantic
+/// action and return the host's truthful result. Used by the action-policy
+/// integration test and the `protocol-client --action` path.
+pub fn connect_control(
+    address: SocketAddr,
+    secret: PairingSecret,
+    permissions: PermissionSet,
+    action: &ControlAction,
+) -> Result<ControlClientStats, TransportError> {
+    let OpenedClient {
+        mut connection,
+        mut client,
+        stats,
+    } = pair_and_open(address, secret, permissions)?;
+
+    let mut control = ControlClientStats {
+        reached_active: stats.reached_active,
+        snapshot_received: false,
+        snapshot_actions: 0,
+        grant_epoch: String::new(),
+        action_result_received: false,
+        action_status: None,
+        action_error: None,
+        action_state: None,
+        encrypted_writes: stats.encrypted_writes,
+        encrypted_reads: stats.encrypted_reads,
+    };
+
+    let snapshot_envelope = connection.read_envelope()?;
+    control.encrypted_reads += 1;
+    let snapshot = client.accept_capability_snapshot(&snapshot_envelope)?;
+    control.snapshot_received = true;
+    control.snapshot_actions = snapshot.actions.len();
+    control.grant_epoch = snapshot.grant_epoch.clone();
+
+    let context = crate::capability::ActionContext {
+        connection_epoch: snapshot.connection_epoch.clone(),
+        session_id: snapshot.session_id.clone(),
+        grant_epoch: snapshot.grant_epoch.clone(),
+        target: snapshot.target(),
+        capability_revision: snapshot.capability_revision,
+        grants: ActionGrants::default(),
+    };
+    let request = ActionRequest::new(
+        &action.id,
+        &context,
+        &action.action,
+        action.schema_version,
+        action.parameters.clone(),
+    )
+    .map_err(|error| TransportError::Control(error.to_string()))?;
+    connection.write_envelope(&client.action_invoke(&request)?)?;
+    control.encrypted_writes += 1;
+    let reply = connection.read_envelope()?;
+    control.encrypted_reads += 1;
+    let result = client.accept_action_result(&reply)?;
+    control.action_result_received = true;
+    control.action_status = Some(result.status);
+    control.action_error = result.error_code;
+    control.action_state = result.state;
+
+    connection.write_envelope(&client.session_close("control action complete")?)?;
+    control.encrypted_writes += 1;
+    Ok(control)
 }
 
 #[derive(Debug, Serialize)]
