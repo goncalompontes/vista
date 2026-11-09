@@ -23,7 +23,7 @@ The protocol is host-backend agnostic. The host advertises capabilities and sema
 - `DiscoveryService`: Bonjour/mDNS advertisement and manual/Tailscale endpoint fallback.
 - `PairingService`: QR/one-time bootstrap, pinned host identity and revocation.
 - `LinuxDesktopRuntime`: composes available providers based on actual interfaces, runtime permissions and verified operations; uses a portal-only picker path if compositor-specific catalog IPC is unavailable.
-- `NiriCatalogAndActions`: optional exact-version `niri-ipc` provider for Niri only; no production `niri msg` subprocesses. It must never be required by WebRTC or generic capture.
+- `NiriCatalogAndActions`: optional **direct Niri Unix-socket JSON IPC** catalog/action provider, independently implemented from Niri's documented public protocol; no production per-action `niri msg` subprocesses. The official GPL-licensed `niri-ipc` crate remains an alternative only after explicit project license review (#73). It must never be required by WebRTC or generic capture.
 - `PortalCaptureProvider` / `PortalInputProvider` / `PortalClipboardProvider`: xdg-desktop-portal and PipeWire/`ashpd` where verified. Their availability and grants are independent; a private compositor may need a separate session-local adapter.
 - `CapturePipeline`: portal/PipeWire frames to GStreamer.
 - `Encoder`: hardware H.264 first, with negotiated profile/bitrate/keyframe control.
@@ -85,7 +85,7 @@ Every target has a monotonically increasing generation. Actions include the gene
 
 1. Freeze the prototype wire protocol and record current interoperability fixtures.
 2. Land canonical protobuf schema and generated clients and the portable host/provider seams with fake adapters.
-3. Implement WebRTC signaling and a synthetic-source vertical slice **without Niri as a dependency**; build optional typed `niri-ipc` catalog/actions in parallel.
+3. Implement WebRTC signaling and a synthetic-source vertical slice **without Niri as a dependency**; build the optional typed Vista adapter over Niri's public JSON socket IPC in parallel (pending license policy #73).
 4. Add a Linux portal capability/permission probe, verify Niri and then GNOME/KDE (plus a wlroots environment) with a published per-capability matrix.
 5. Connect real consented ScreenCast/PipeWire/H.264 capture to WebRTC and iOS using the picker-only path first; correlate catalog to portal sources only when proven.
 6. Bind host identity and pairing to secure signaling/WebRTC before any real network playback; discovery can proceed alongside pairing.
