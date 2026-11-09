@@ -220,6 +220,30 @@ impl StreamSession {
         Ok(())
     }
 
+    /// Adopt a new surface geometry. A changed geometry discards buffered raw
+    /// and encoded data and advances the H.264 continuity generation, so the
+    /// consumer must wait for a fresh SPS/PPS IDR. The first geometry establishes
+    /// the baseline without a flush.
+    pub fn resize(
+        &mut self,
+        token: SessionToken,
+        geometry: FrameGeometry,
+    ) -> Result<bool, SessionError> {
+        self.verify(token)?;
+        if self.state != SessionState::Streaming {
+            return Err(SessionError::InvalidTransition);
+        }
+        let changed = self.geometry.is_some_and(|old| old != geometry);
+        self.geometry = Some(geometry);
+        if changed {
+            self.resize_events += 1;
+            self.queue.clear();
+            self.encoded_queue.clear();
+            self.bump_h264_continuity(H264Discontinuity::GeometryChange);
+        }
+        Ok(changed)
+    }
+
     /// A consumer must present the same live grant token as the producer.
     pub fn dequeue(&mut self, token: SessionToken) -> Result<Option<Vec<u8>>, SessionError> {
         self.verify(token)?;
