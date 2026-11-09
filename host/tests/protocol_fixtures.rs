@@ -2,6 +2,7 @@ use serde::Deserialize;
 use vista_host::protocol::{
     ControlMessage, Envelope, PermissionSet, ProtocolVersion, VersionRange,
 };
+use vista_host::transport::{Direction, RecordCipher};
 
 #[derive(Deserialize)]
 struct Fixtures {
@@ -43,4 +44,35 @@ fn swift_compatible_fixtures_decode_in_rust() {
         let bytes = envelope.encode().unwrap();
         assert_eq!(&Envelope::decode(&bytes).unwrap(), envelope);
     }
+}
+
+#[derive(Deserialize)]
+struct RecordVector {
+    key_hex: String,
+    session_id: String,
+    direction: String,
+    counter: u64,
+    plaintext_hex: String,
+    ciphertext_hex: String,
+}
+
+#[derive(Deserialize)]
+struct PairingFixture {
+    record: RecordVector,
+}
+
+#[test]
+fn shared_media_record_vector_matches_the_swift_implementation() {
+    let fixture: PairingFixture =
+        serde_json::from_str(include_str!("../../docs/fixtures/pairing-v1.json")).unwrap();
+    let record = fixture.record;
+    assert_eq!(record.direction, "client_to_host");
+    assert_eq!(record.counter, 0);
+    let key: [u8; 32] = hex::decode(&record.key_hex).unwrap().try_into().unwrap();
+    let mut cipher = RecordCipher::new(&key, &record.session_id, Direction::ClientToHost).unwrap();
+    let sealed = cipher
+        .seal(&hex::decode(&record.plaintext_hex).unwrap())
+        .unwrap();
+    assert_eq!(hex::encode(sealed), record.ciphertext_hex);
+    assert_eq!(cipher.counter(), 1);
 }

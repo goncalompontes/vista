@@ -2024,6 +2024,67 @@ mod tests {
     }
 
     #[test]
+    fn shared_pairing_vector_matches_the_swift_implementation() {
+        #[derive(Deserialize)]
+        struct Policy {
+            video: bool,
+            audio: bool,
+            input: bool,
+            clipboard: bool,
+        }
+        #[derive(Deserialize)]
+        struct Vector {
+            secret_hex: String,
+            client_id: String,
+            client_nonce: String,
+            host_id: String,
+            host_nonce: String,
+            pairing_id: String,
+            selected: ProtocolVersion,
+            policy: Policy,
+            transcript_hex: String,
+            client_tag: String,
+            session_id: String,
+            host_tag: String,
+            client_to_host: String,
+            host_to_client: String,
+        }
+
+        let vector: Vector =
+            serde_json::from_str(include_str!("../../docs/fixtures/pairing-v1.json")).unwrap();
+        let secret = PairingSecret::from_hex(&vector.secret_hex).unwrap();
+        let policy = PermissionSet {
+            video: vector.policy.video,
+            audio: vector.policy.audio,
+            input: vector.policy.input,
+            clipboard: vector.policy.clipboard,
+        };
+        let transcript = transcript(
+            vector.selected,
+            &vector.client_id,
+            &vector.client_nonce,
+            &vector.host_id,
+            &vector.host_nonce,
+            &vector.pairing_id,
+            policy,
+        );
+        assert_eq!(hex::encode(&transcript), vector.transcript_hex);
+        assert_eq!(
+            hex::encode(tag(&secret, b"client-confirm\n", &transcript)),
+            vector.client_tag
+        );
+        assert_eq!(
+            hex::encode(host_tag(&secret, &transcript, &vector.session_id)),
+            vector.host_tag
+        );
+        let keys =
+            SessionKeys::derive(&secret, &vector.pairing_id, &transcript, &vector.session_id)
+                .unwrap();
+        assert_eq!(hex::encode(keys.client_to_host()), vector.client_to_host);
+        assert_eq!(hex::encode(keys.host_to_client()), vector.host_to_client);
+    }
+
+    #[test]
     fn diagnostic_covers_the_negative_paths() {
         let report = diagnostic().unwrap();
         assert!(report.verified, "{report:?}");

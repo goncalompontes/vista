@@ -1,15 +1,17 @@
 # Vista iOS/iPadOS client
 
-A native SwiftUI application shell, with a small Foundation-only Swift package
-for model and protocol types. **This is a UI preview, not an active stream.**
-The gallery is fictional sample data: no host is paired, no network requests
-are made, and no desktop pixels are captured or transmitted.
+A native SwiftUI application shell, with a Foundation-only Swift package for
+model and protocol types. The control protocol, pairing and encrypted record
+layer are implemented and tested; the iOS app can pair with a Vista host and
+open an authenticated control session. **Catalog, video and input are not
+implemented yet.** The gallery remains fictional sample data; no desktop pixels
+are captured or transmitted.
 
 ## Structure
 
-- `core/`: `VistaCore` Swift Package; portable models and tests.
+- `core/`: `VistaCore` Swift Package; portable models, control protocol/pairing crypto and tests (swift-crypto).
 - `ios/project.yml`: XcodeGen source for the iOS app project.
-- `ios/Vista/`: SwiftUI UI shell for iPhone and iPad.
+- `ios/Vista/`: SwiftUI UI shell for iPhone and iPad; `ios/Vista/Transport/` holds Network.framework and Keychain adapters.
 - `preview/`: interactive browser-only iPhone/iPad frame and navigation for rapid UI debugging on Linux (not a simulator).
 
 ## Interactive preview on Arch Linux
