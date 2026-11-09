@@ -32,15 +32,18 @@ fn usage() {
     eprintln!("       vista-host pipewire-loopback [--json]");
     eprintln!("       vista-host capability-test [--json]");
     eprintln!("       vista-host lifecycle-test [--json]");
+    eprintln!("       vista-host control-dispatch-test [--json]");
     eprintln!("       vista-host protocol-test [--json]");
     eprintln!("       vista-host protocol-loopback [--json]");
     eprintln!(
-        "       vista-host protocol-serve --confirm [--listen ADDR] [--secret-hex HEX] [--allow-remote] [--json]"
+        "       vista-host protocol-serve --confirm [--listen ADDR] [--secret-hex HEX] [--window ID --allow-window-actions|--allow-desktop-actions|--allow-clipboard|--allow-input] [--fake-actions] [--capability-revision N] [--allow-remote] [--json]"
     );
     eprintln!("       vista-host keyframe-control-test [--json]");
     eprintln!("       vista-host media-stream --serve [--listen ADDR] [--frames N] [--json]");
     eprintln!("       vista-host media-stream --connect ADDR --secret-hex HEX [--json]");
-    eprintln!("       vista-host protocol-client --connect ADDR --secret-hex HEX [--json]");
+    eprintln!(
+        "       vista-host protocol-client --connect ADDR --secret-hex HEX [--allow-input] [--action ID] [--json]"
+    );
 }
 
 fn run() -> Result<(), NiriError> {
@@ -575,11 +578,41 @@ fn run() -> Result<(), NiriError> {
         }
         [command, rest @ ..] if command.as_str() == "protocol-serve" => {
             let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
-            protocol_serve(&rest, json)?;
+            protocol_serve(&rest, json, &niri)?;
         }
         [command, rest @ ..] if command.as_str() == "protocol-client" => {
             let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
             protocol_client(&rest, json)?;
+        }
+        [command] if command.as_str() == "control-dispatch-test" => {
+            eprintln!(
+                "Running the session-bound capability/action dispatch diagnostic through an in-memory pairing; no network, capture or input injection."
+            );
+            let report = vista_host::control_dispatch::diagnostic().map_err(|error| {
+                NiriError::Unavailable(format!("control dispatch diagnostic failed: {error}"))
+            })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Control dispatch verified={}: protocol session={}, snapshot actions={} (grant {}), completed={}, backend calls={}, duplicate cached={}.",
+                    report.verified,
+                    report.protocol_session,
+                    report.snapshot_actions,
+                    report.snapshot_grant_epoch,
+                    report.action_completed,
+                    report.backend_calls,
+                    report.duplicate_cached
+                );
+                println!(
+                    "Rejected: revoked={}, stale grant={}, wrong session={}, wrong target={}, malformed={}.",
+                    report.revoked_rejected,
+                    report.stale_grant_rejected,
+                    report.wrong_session_rejected,
+                    report.wrong_target_rejected,
+                    report.malformed_rejected
+                );
+            }
         }
         [command] if command.as_str() == "lifecycle-test" => {
             eprintln!(
@@ -754,11 +787,24 @@ fn check_known_arguments(
 
 /// One-shot control listener. It never captures or streams media, and it
 /// refuses non-loopback addresses unless the caller explicitly opts in.
-fn protocol_serve(args: &[&str], json: bool) -> Result<(), NiriError> {
+fn protocol_serve(args: &[&str], json: bool, niri: &Niri) -> Result<(), NiriError> {
     check_known_arguments(
         args,
-        &["--listen", "--secret-hex"],
-        &["--confirm", "--allow-remote"],
+        &[
+            "--listen",
+            "--secret-hex",
+            "--window",
+            "--capability-revision",
+        ],
+        &[
+            "--confirm",
+            "--allow-remote",
+            "--allow-window-actions",
+            "--allow-desktop-actions",
+            "--allow-clipboard",
+            "--allow-input",
+            "--fake-actions",
+        ],
     )?;
     if !args.contains(&"--confirm") {
         usage();
@@ -775,6 +821,97 @@ fn protocol_serve(args: &[&str], json: bool) -> Result<(), NiriError> {
             "refusing a non-loopback control listener without --allow-remote".into(),
         ));
     }
+
+    let grants = capability::ActionGrants {
+        window_actions: args.contains(&"--allow-window-actions"),
+        desktop_actions: args.contains(&"--allow-desktop-actions"),
+        clipboard: args.contains(&"--allow-clipboard"),
+    };
+    let allow_input = args.contains(&"--allow-input");
+    let window = match option(args, "--window") {
+        Some(value) => Some(
+            value
+                .parse::<u64>()
+                .map_err(|_| NiriError::InvalidArgument("--window must be an integer".into()))?,
+        ),
+        None => None,
+    };
+    if window.is_none()
+        && (grants.window_actions || grants.desktop_actions || grants.clipboard || allow_input)
+    {
+        return Err(NiriError::InvalidArgument(
+            "--allow-window-actions/--allow-desktop-actions/--allow-clipboard/--allow-input require --window"
+                .into(),
+        ));
+    }
+    let fake_actions = args.contains(&"--fake-actions");
+    if fake_actions && window.is_none() {
+        return Err(NiriError::InvalidArgument(
+            "--fake-actions requires --window".into(),
+        ));
+    }
+    let capability_revision = match option(args, "--capability-revision") {
+        Some(value) => value.parse::<u64>().map_err(|_| {
+            NiriError::InvalidArgument("--capability-revision must be a positive integer".into())
+        })?,
+        None => 1,
+    };
+    if capability_revision == 0 {
+        return Err(NiriError::InvalidArgument(
+            "--capability-revision must be non-zero".into(),
+        ));
+    }
+    let policy = protocol::PermissionSet {
+        video: true,
+        input: allow_input,
+        clipboard: grants.clipboard,
+        audio: false,
+    };
+    let control = if let Some(id) = window {
+        let target = if fake_actions {
+            capability::TargetRef::new(format!("w{id}"), format!("fake-session#w{id}")).map_err(
+                |error| NiriError::InvalidArgument(format!("invalid control target: {error}")),
+            )?
+        } else {
+            niri.window(id)?.ok_or_else(|| {
+                NiriError::InvalidArgument(format!("window ID {id} was not found"))
+            })?;
+            capability::TargetRef::new(format!("w{id}"), capability::niri_generation(id)).map_err(
+                |error| NiriError::InvalidArgument(format!("invalid control target: {error}")),
+            )?
+        };
+        let backend: Box<dyn capability::ActionBackend + Send> = if fake_actions {
+            Box::new(capability::FakeActionBackend::default())
+        } else {
+            Box::new(capability::NiriActionBackend::default())
+        };
+        Some(vista_host::transport::ControlSetup::new(
+            target,
+            grants,
+            capability::InputPermissions {
+                pointer: allow_input,
+                keyboard: allow_input,
+                text: allow_input,
+            },
+            capability_revision,
+            backend,
+        ))
+    } else {
+        None
+    };
+    let control_info = control.as_ref().map(|setup| {
+        serde_json::json!({
+            "target_id": setup.target.target_id,
+            "target_generation": setup.target.target_generation,
+            "capability_revision": setup.capability_revision,
+            "window_actions": setup.grants.window_actions,
+            "desktop_actions": setup.grants.desktop_actions,
+            "clipboard": setup.grants.clipboard,
+            "input": allow_input,
+            "backend": if fake_actions { "fake" } else { "niri" },
+        })
+    });
+
     let secret = match option(args, "--secret-hex") {
         Some(value) => protocol::PairingSecret::from_hex(value).map_err(|error| {
             NiriError::InvalidArgument(format!("invalid --secret-hex: {error}"))
@@ -783,10 +920,12 @@ fn protocol_serve(args: &[&str], json: bool) -> Result<(), NiriError> {
             NiriError::Unavailable(format!("cannot generate pairing secret: {error}"))
         })?,
     };
-    let (server, offer) = vista_host::transport::HostControlServer::bind(
+    let (server, offer) = vista_host::transport::HostControlServer::bind_with_control(
         address,
         secret.clone(),
         protocol::unix_now(),
+        policy,
+        control,
     )
     .map_err(|error| NiriError::Unavailable(format!("cannot bind control listener: {error}")))?;
     let invite = serde_json::json!({
@@ -795,6 +934,7 @@ fn protocol_serve(args: &[&str], json: bool) -> Result<(), NiriError> {
         "pairing_id": offer.pairing_id.clone(),
         "secret_hex": secret.to_hex(),
         "expires_at": offer.expires_at,
+        "control": control_info,
     });
     if json {
         println!("{}", serde_json::to_string(&invite)?);
@@ -805,6 +945,22 @@ fn protocol_serve(args: &[&str], json: bool) -> Result<(), NiriError> {
             offer.address, offer.pairing_id, offer.expires_at
         );
         println!("Pairing secret (out of band): {}", secret.to_hex());
+        if let Some(info) = &control_info {
+            println!(
+                "Control target {} ({}), capability revision {}, grants window={} desktop={} clipboard={} input={}, backend {}.",
+                info["target_id"],
+                info["target_generation"],
+                info["capability_revision"],
+                info["window_actions"],
+                info["desktop_actions"],
+                info["clipboard"],
+                info["input"],
+                info["backend"]
+            );
+            println!("Action dispatch is enabled; native input injection is not implemented.");
+        } else {
+            println!("No action policy attached: this listener is video-only.");
+        }
         io::stdout().flush()?;
     }
     let stats = server
@@ -814,18 +970,25 @@ fn protocol_serve(args: &[&str], json: bool) -> Result<(), NiriError> {
         println!("{}", serde_json::to_string(&stats)?);
     } else {
         println!(
-            "Encrypted control session: {} handshake frames, {} encrypted records, {} keyframe request(s), pong sent={}.",
+            "Encrypted control session: {} handshake frames, {} encrypted records, {} keyframe request(s), pong sent={}, snapshot sent={}, {} action result(s) ({} completed).",
             stats.handshake_frames,
             stats.encrypted_records,
             stats.keyframe_requests,
-            stats.pong_sent
+            stats.pong_sent,
+            stats.control_snapshot_sent,
+            stats.action_results,
+            stats.actions_completed
         );
     }
     Ok(())
 }
 
 fn protocol_client(args: &[&str], json: bool) -> Result<(), NiriError> {
-    check_known_arguments(args, &["--connect", "--secret-hex"], &[])?;
+    check_known_arguments(
+        args,
+        &["--connect", "--secret-hex", "--action"],
+        &["--allow-input"],
+    )?;
     let connect = option(args, "--connect")
         .ok_or_else(|| NiriError::InvalidArgument("protocol-client requires --connect".into()))?;
     let address: SocketAddr = connect
@@ -836,6 +999,44 @@ fn protocol_client(args: &[&str], json: bool) -> Result<(), NiriError> {
     })?;
     let secret = protocol::PairingSecret::from_hex(secret_hex)
         .map_err(|error| NiriError::InvalidArgument(format!("invalid --secret-hex: {error}")))?;
+
+    if let Some(action) = option(args, "--action") {
+        let permissions = protocol::PermissionSet {
+            video: true,
+            input: args.contains(&"--allow-input"),
+            ..protocol::PermissionSet::default()
+        };
+        let probe = vista_host::transport::ControlAction::new("cli-action", action);
+        let stats = vista_host::transport::connect_control(address, secret, permissions, &probe)
+            .map_err(|error| {
+                NiriError::Unavailable(format!("control action client failed: {error}"))
+            })?;
+        let verified =
+            stats.reached_active && stats.snapshot_received && stats.action_result_received;
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "protocol": "1.0",
+                    "address": address.to_string(),
+                    "verified": verified,
+                    "stats": stats,
+                }))?
+            );
+        } else {
+            println!(
+                "Control action client on {}: active={}, snapshot actions={} (grant {}), result={:?}, error={:?}.",
+                address,
+                stats.reached_active,
+                stats.snapshot_actions,
+                stats.grant_epoch,
+                stats.action_status,
+                stats.action_error
+            );
+        }
+        return Ok(());
+    }
+
     let stats = vista_host::transport::connect(address, secret)
         .map_err(|error| NiriError::Unavailable(format!("control client failed: {error}")))?;
     let verified = stats.reached_active && stats.pong_verified;

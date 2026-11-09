@@ -56,6 +56,14 @@ impl ControlLease {
         self.active
     }
 
+    pub fn connection_epoch(&self) -> &str {
+        &self.connection_epoch
+    }
+
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
     pub fn grant_epoch(&self) -> u64 {
         self.grant_epoch
     }
