@@ -63,7 +63,11 @@ struct WelcomeView: View {
                         .foregroundStyle(VistaPalette.subtleText)
                         .multilineTextAlignment(.center)
                 }
+                #if SKIP
+                .frame(maxWidth: 360)
+                #else
                 .frame(maxWidth: 520)
+                #endif
                 .padding(.horizontal, 26)
                 .padding(.vertical, 24)
                 .frame(maxWidth: .infinity)
@@ -75,9 +79,7 @@ struct WelcomeView: View {
 
     private func feature(_ symbol: String, _ title: String) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: symbol)
-                .font(.system(size: 19))
-                .foregroundStyle(VistaPalette.accent)
+            VistaSymbol(name: symbol, size: 19)
                 .frame(width: 26)
             Text(title)
                 .font(.subheadline.weight(.medium))

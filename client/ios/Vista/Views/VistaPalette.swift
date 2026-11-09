@@ -40,3 +40,40 @@ struct VistaLogo: View {
         #endif
     }
 }
+
+
+/// SF Symbols are not all mapped by SkipUI on Android; this wrapper keeps the
+/// shared views readable on both platforms.
+struct VistaSymbol: View {
+    let name: String
+    var size: CGFloat = 18
+
+    var body: some View {
+        #if SKIP
+        Text(Self.glyph(for: name))
+            .font(.system(size: size, weight: .medium))
+            .foregroundStyle(VistaPalette.accent)
+        #else
+        Image(systemName: name)
+            .font(.system(size: size, weight: .medium))
+            .foregroundStyle(VistaPalette.accent)
+        #endif
+    }
+
+    private static func glyph(for name: String) -> String {
+        switch name {
+        case "globe": return "◎"
+        case "terminal": return "⌘"
+        case "chevron.left.forwardslash.chevron.right": return "</>"
+        case "music.note": return "♫"
+        case "macwindow": return "▣"
+        case "square.stack.3d.up": return "▤"
+        case "hand.draw": return "☝"
+        case "wifi.slash": return "⌁"
+        case "video.slash": return "⊘"
+        case "arrow.right": return "→"
+        case "arrow.left": return "←"
+        default: return "•"
+        }
+    }
+}

@@ -12,12 +12,8 @@ struct StreamPreviewView: View {
                         .fill(VistaPalette.surface)
 
                     VStack(spacing: 16) {
-                        Image(systemName: application.symbolName)
-                            .font(.system(size: 56, weight: .light))
-                            .foregroundStyle(VistaPalette.accent)
-                        Image(systemName: "video.slash")
-                            .font(.title3)
-                            .foregroundStyle(VistaPalette.subtleText)
+                        VistaSymbol(name: application.symbolName, size: 56)
+                        VistaSymbol(name: "video.slash", size: 20)
                         Text("No active stream")
                             .font(.headline)
                             .foregroundStyle(.white)
@@ -55,7 +51,11 @@ struct StreamPreviewView: View {
                     // not execute native actions.
                 }
             }
+            #if SKIP
+            .frame(maxWidth: 380)
+            #else
             .frame(maxWidth: 760)
+            #endif
             .padding(20)
             .frame(maxWidth: .infinity)
         }
