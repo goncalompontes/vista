@@ -238,6 +238,17 @@ public final class ControlPairingClient {
         }
     }
 
+    /// Consume a catalog snapshot and advance the host sequence. The catalog is
+    /// metadata, not a grant; callers must not infer permissions from it.
+    @discardableResult
+    public func acceptCatalogSnapshot(_ envelope: Envelope) throws -> CatalogSnapshot {
+        try checkHostSequence(envelope)
+        guard case let .catalogSnapshot(snapshot) = envelope.body else {
+            throw WireError.unexpectedMessage(envelope.body.typeName)
+        }
+        return snapshot
+    }
+
     public func sessionClose(reason: String) throws -> Envelope {
         guard state == .active else {
             throw WireError.invalidTransition("an active session")

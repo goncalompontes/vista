@@ -64,6 +64,19 @@
       "seq": 3,
       "type": "pong",
       "nonce": 42
+    },
+    {
+      "seq": 4,
+      "type": "catalog.snapshot",
+      "v": 1,
+      "connection_epoch": "404142434445464748494a4b4c4d4e4f",
+      "session_id": "404142434445464748494a4b4c4d4e4f",
+      "generation": "niri-test",
+      "revision": 1,
+      "entries": [
+        { "window_id": 5, "title": "Browser", "app_id": "firefox", "workspace_id": 2 },
+        { "window_id": 9, "app_id": "Alacritty" }
+      ]
     }
   ]
 }

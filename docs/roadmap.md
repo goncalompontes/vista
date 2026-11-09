@@ -30,7 +30,7 @@ The host now also has a **transport-neutral, permission-scoped H.264 access-unit
 ## M3 — iOS/iPadOS client
 
 - [x] Initial SwiftUI iPhone/iPad interface and portable Swift model package (preview data only; macOS build verification pending).
-- [ ] Actual host discovery, authenticated pairing and live catalog integration. The v1 control client, pairing crypto and encrypted record layer now exist in `VistaCore` with 36 passing Swift tests and a cross-language pairing/record vector; the iOS app adds a Network.framework connection, Keychain secret storage and a pairing sheet that reaches an opened control session. Host discovery, catalog transport and UI wiring remain pending.
+- [ ] Actual host discovery, authenticated pairing and live catalog integration. The v1 control client, pairing crypto and encrypted record layer now exist in `VistaCore` with 41 passing Swift tests and cross-language pairing/record vectors; the iOS app adds a Network.framework connection, Keychain secret storage and a pairing sheet. A bounded `catalog.snapshot` now carries Niri window metadata over the authenticated session (`protocol-serve --catalog`), and the library shows LIVE entries or an honest empty state. Incremental catalog updates, host discovery and capability-action wiring remain pending.
 - [ ] Hardware video decoder, responsive native input and keyboard UX. No VideoToolbox decode or input path yet.
 - [ ] App launcher/gallery informed by Sill's polished UX. See [Sill UI source reference and reuse map](sill-reference.md) before implementing iOS screens.
 - [ ] Audio, clipboard, session reconnect and background handling.

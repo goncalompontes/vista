@@ -2,10 +2,10 @@
 
 A native SwiftUI application shell, with a Foundation-only Swift package for
 model and protocol types. The control protocol, pairing and encrypted record
-layer are implemented and tested; the iOS app can pair with a Vista host and
-open an authenticated control session. **Catalog, video and input are not
-implemented yet.** The gallery remains fictional sample data; no desktop pixels
-are captured or transmitted.
+layer are implemented and tested; the iOS app can pair with a Vista host, open
+an authenticated control session and display a bounded live window catalog.
+**Video and input are not implemented yet.** The library falls back to clearly
+labelled sample data only when no host catalog has been received.
 
 ## Structure
 

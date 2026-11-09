@@ -84,6 +84,148 @@ public struct PermissionSet: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+public struct CatalogEntry: Codable, Equatable, Sendable, Identifiable {
+    public let windowID: UInt64
+    public let title: String?
+    public let appID: String?
+    public let workspaceID: UInt64?
+
+    public var id: String { "w\(windowID)" }
+
+    public init(windowID: UInt64, title: String? = nil, appID: String? = nil, workspaceID: UInt64? = nil) {
+        self.windowID = windowID
+        self.title = title
+        self.appID = appID
+        self.workspaceID = workspaceID
+    }
+
+    public var displayName: String {
+        if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return title
+        }
+        if let appID, !appID.isEmpty {
+            return appID
+        }
+        return "Window \(windowID)"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case windowID = "window_id"
+        case title
+        case appID = "app_id"
+        case workspaceID = "workspace_id"
+    }
+}
+
+public struct CatalogSnapshot: Codable, Equatable, Sendable {
+    public static let maxEntries = 256
+    public static let maxTitleBytes = 256
+    public static let maxAppIDBytes = 128
+
+    public let v: UInt16
+    public let messageType: String
+    public let connectionEpoch: String
+    public let sessionID: String?
+    public let generation: String
+    public let revision: UInt64
+    public let entries: [CatalogEntry]
+
+    public init(
+        v: UInt16 = 1,
+        messageType: String = "catalog.snapshot",
+        connectionEpoch: String,
+        sessionID: String?,
+        generation: String,
+        revision: UInt64,
+        entries: [CatalogEntry]
+    ) throws {
+        self.v = v
+        self.messageType = messageType
+        self.connectionEpoch = connectionEpoch
+        self.sessionID = sessionID
+        self.generation = generation
+        self.revision = revision
+        self.entries = entries
+        try validate()
+    }
+
+    public func validate() throws {
+        guard v == 1, messageType == "catalog.snapshot" else {
+            throw WireError.invalidField("catalog version")
+        }
+        guard !connectionEpoch.isEmpty, connectionEpoch.utf8.count <= 128 else {
+            throw WireError.invalidField("connection_epoch")
+        }
+        if let sessionID, sessionID.isEmpty || sessionID.utf8.count > 128 {
+            throw WireError.invalidField("session_id")
+        }
+        guard !generation.isEmpty, generation.utf8.count <= 256, revision > 0 else {
+            throw WireError.invalidField("catalog header")
+        }
+        guard entries.count <= Self.maxEntries else {
+            throw WireError.invalidField("catalog entries")
+        }
+        var seen = Set<UInt64>()
+        for entry in entries {
+            guard seen.insert(entry.windowID).inserted else {
+                throw WireError.invalidField("duplicate window id")
+            }
+            if let title = entry.title,
+               title.utf8.count > Self.maxTitleBytes
+            {
+                throw WireError.invalidField("title")
+            }
+            if let appID = entry.appID,
+               appID.isEmpty || appID.utf8.count > Self.maxAppIDBytes
+            {
+                throw WireError.invalidField("app_id")
+            }
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case v
+        case messageType = "type"
+        case connectionEpoch = "connection_epoch"
+        case sessionID = "session_id"
+        case generation
+        case revision
+        case entries
+    }
+
+    init(from container: KeyedDecodingContainer<AnyCodingKey>) throws {
+        func string(_ key: String) throws -> String {
+            guard let value = try container.decodeIfPresent(String.self, forKey: AnyCodingKey(key)) else {
+                throw WireError.invalidField(key)
+            }
+            return value
+        }
+        guard let version = try container.decodeIfPresent(UInt16.self, forKey: AnyCodingKey("v")),
+              let revision = try container.decodeIfPresent(UInt64.self, forKey: AnyCodingKey("revision")),
+              let entries = try container.decodeIfPresent([CatalogEntry].self, forKey: AnyCodingKey("entries"))
+        else {
+            throw WireError.invalidField("catalog header")
+        }
+        self.v = version
+        self.messageType = "catalog.snapshot"
+        self.connectionEpoch = try string("connection_epoch")
+        self.sessionID = try container.decodeIfPresent(String.self, forKey: AnyCodingKey("session_id"))
+        self.generation = try string("generation")
+        self.revision = revision
+        self.entries = entries
+        try validate()
+    }
+
+    func encodePayload(to container: inout KeyedEncodingContainer<AnyCodingKey>) throws {
+        try container.encode(v, forKey: AnyCodingKey("v"))
+        try container.encode(connectionEpoch, forKey: AnyCodingKey("connection_epoch"))
+        try container.encodeIfPresent(sessionID, forKey: AnyCodingKey("session_id"))
+        try container.encode(generation, forKey: AnyCodingKey("generation"))
+        try container.encode(revision, forKey: AnyCodingKey("revision"))
+        try container.encode(entries, forKey: AnyCodingKey("entries"))
+    }
+}
+
 public enum ControlMessage: Equatable, Sendable {
     case clientHello(versions: VersionRange, clientID: String, clientNonce: String)
     case serverHello(
@@ -105,6 +247,7 @@ public enum ControlMessage: Equatable, Sendable {
     case pong(nonce: UInt64)
     case sessionClose(sessionID: String?, reason: String)
     case error(code: String, message: String)
+    case catalogSnapshot(CatalogSnapshot)
 
     public var typeName: String {
         switch self {
@@ -120,6 +263,7 @@ public enum ControlMessage: Equatable, Sendable {
         case .pong: "pong"
         case .sessionClose: "session_close"
         case .error: "error"
+        case .catalogSnapshot: "catalog.snapshot"
         }
     }
 }
@@ -249,6 +393,8 @@ extension ControlMessage {
             )
         case "error":
             self = .error(code: try string("code"), message: try string("message"))
+        case "catalog.snapshot":
+            self = .catalogSnapshot(try CatalogSnapshot(from: c))
         default:
             throw WireError.unknownMessageType(type)
         }
@@ -298,6 +444,8 @@ extension ControlMessage {
         case let .error(code, message):
             try container.encode(code, forKey: AnyCodingKey("code"))
             try container.encode(message, forKey: AnyCodingKey("message"))
+        case let .catalogSnapshot(snapshot):
+            try snapshot.encodePayload(to: &container)
         }
     }
 }

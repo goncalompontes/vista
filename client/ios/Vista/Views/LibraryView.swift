@@ -19,10 +19,14 @@ private enum LibraryFilter: String, CaseIterable, Identifiable {
 
 struct LibraryView: View {
     let onExit: () -> Void
+    var liveApplications: [RemoteApplication] = []
+    var isLive = false
+    var hostLabel: String?
     @State private var filter: LibraryFilter = .all
 
     private var applications: [RemoteApplication] {
-        DemoCatalog.applications.filter { filter.includes($0) }
+        let source = isLive ? liveApplications : DemoCatalog.applications
+        return source.filter { filter.includes($0) }
     }
 
     var body: some View {
@@ -40,24 +44,28 @@ struct LibraryView: View {
                                 .foregroundStyle(VistaPalette.subtleText)
                         }
                         Spacer()
-                        Text("DEMO")
+                        Text(isLive ? "LIVE" : "DEMO")
                             .font(.caption2.weight(.bold))
                             .tracking(1.2)
                             .padding(.horizontal, 11)
                             .padding(.vertical, 7)
                             .background(VistaPalette.elevated, in: Capsule())
-                            .foregroundStyle(VistaPalette.accent)
+                            .foregroundStyle(isLive ? .green : VistaPalette.accent)
                     }
 
                     HStack(alignment: .top, spacing: 14) {
-                        VistaSymbol(name: "wifi.slash")
+                        VistaSymbol(name: isLive ? "wifi" : "wifi.slash")
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("No Linux host paired")
+                            Text(isLive ? "Connected to \(hostLabel ?? "Linux host")" : "No Linux host paired")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.white)
-                            Text("This is a local interface preview. The catalog below is sample data, not discovered windows.")
-                                .font(.footnote)
-                                .foregroundStyle(VistaPalette.subtleText)
+                            Text(
+                                isLive
+                                    ? "Showing the window catalog reported by the host. Video and input are not enabled yet."
+                                    : "This is a local interface preview. The catalog below is sample data, not discovered windows."
+                            )
+                            .font(.footnote)
+                            .foregroundStyle(VistaPalette.subtleText)
                         }
                     }
                     .padding(17)
@@ -106,7 +114,22 @@ struct LibraryView: View {
                         }
                     }
 
-                    Text("Streaming, host pairing and input are not available in this preview.")
+                    if isLive && applications.isEmpty {
+                        Text(
+                            filter == .all
+                                ? "The host reported no windows."
+                                : "No windows match this filter."
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(VistaPalette.subtleText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    Text(
+                        isLive
+                            ? "Catalog from the paired host. Video and input arrive in a later increment."
+                            : "Streaming, host pairing and input are not available in this preview."
+                    )
                         .font(.footnote)
                         .foregroundStyle(VistaPalette.subtleText)
                         .padding(.top, 3)

@@ -225,10 +225,21 @@ pub enum ControlMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         capability_revision: Option<u64>,
     },
+    /// Bounded host-owned window catalog. Metadata only; no capability grant.
+    #[serde(rename = "catalog.snapshot")]
+    CatalogSnapshot {
+        v: u16,
+        connection_epoch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        generation: String,
+        revision: u64,
+        entries: Vec<crate::catalog_wire::CatalogEntry>,
+    },
 }
 
 impl ControlMessage {
-    fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::ClientHello { .. } => "client_hello",
             Self::ServerHello { .. } => "server_hello",
@@ -245,6 +256,7 @@ impl ControlMessage {
             Self::CapabilitySnapshot { .. } => "capabilities.snapshot",
             Self::ActionInvoke { .. } => "action.invoke",
             Self::ActionResult { .. } => "action.result",
+            Self::CatalogSnapshot { .. } => "catalog.snapshot",
         }
     }
 }
@@ -406,6 +418,52 @@ impl TryFrom<&ControlMessage> for crate::capability::ActionResult {
             state: state.clone(),
             capability_revision: *capability_revision,
         })
+    }
+}
+
+impl From<crate::catalog_wire::CatalogSnapshot> for ControlMessage {
+    fn from(snapshot: crate::catalog_wire::CatalogSnapshot) -> Self {
+        Self::CatalogSnapshot {
+            v: snapshot.v,
+            connection_epoch: snapshot.connection_epoch,
+            session_id: snapshot.session_id,
+            generation: snapshot.generation,
+            revision: snapshot.revision,
+            entries: snapshot.entries,
+        }
+    }
+}
+
+impl TryFrom<&ControlMessage> for crate::catalog_wire::CatalogSnapshot {
+    type Error = crate::catalog_wire::CatalogWireError;
+
+    fn try_from(message: &ControlMessage) -> Result<Self, Self::Error> {
+        let ControlMessage::CatalogSnapshot {
+            v,
+            connection_epoch,
+            session_id,
+            generation,
+            revision,
+            entries,
+        } = message
+        else {
+            return Err(crate::catalog_wire::CatalogWireError::new(
+                "not a catalog.snapshot message",
+            ));
+        };
+        let snapshot = Self {
+            v: *v,
+            message_type: crate::catalog_wire::CATALOG_MESSAGE_TYPE.into(),
+            connection_epoch: connection_epoch.clone(),
+            session_id: session_id.clone(),
+            generation: generation.clone(),
+            revision: *revision,
+            entries: entries.clone(),
+        };
+        snapshot
+            .validate()
+            .map_err(crate::catalog_wire::CatalogWireError::new)?;
+        Ok(snapshot)
     }
 }
 
@@ -864,6 +922,30 @@ impl HostSession {
         self.control.as_mut()
     }
 
+    /// Emit a bounded catalog snapshot for the authenticated session. The
+    /// snapshot must target this session; it never grants capabilities.
+    pub fn emit_catalog(
+        &mut self,
+        snapshot: crate::catalog_wire::CatalogSnapshot,
+    ) -> Result<Envelope, ProtocolError> {
+        let session_id = self
+            .session_id
+            .as_deref()
+            .ok_or(ProtocolError::SessionMismatch)?;
+        if snapshot.session_id.as_deref() != Some(session_id)
+            || snapshot.connection_epoch != session_id
+        {
+            return Err(ProtocolError::SessionMismatch);
+        }
+        snapshot
+            .validate()
+            .map_err(|_| ProtocolError::InvalidTransition {
+                expected: "a valid catalog snapshot",
+                actual: "an invalid catalog snapshot",
+            })?;
+        Ok(self.reply(ControlMessage::from(snapshot)))
+    }
+
     fn reply(&mut self, body: ControlMessage) -> Envelope {
         let envelope = Envelope::new(self.next_host_seq, body);
         self.next_host_seq = self.next_host_seq.wrapping_add(1);
@@ -1306,6 +1388,20 @@ impl ClientSession {
         }
         self.state = ClientState::Active;
         Ok(())
+    }
+
+    /// Consume one host `catalog.snapshot` and advance the host sequence.
+    pub fn accept_catalog_snapshot(
+        &mut self,
+        envelope: &Envelope,
+    ) -> Result<crate::catalog_wire::CatalogSnapshot, ProtocolError> {
+        self.check_host_sequence(envelope)?;
+        crate::catalog_wire::CatalogSnapshot::try_from(&envelope.body).map_err(|_| {
+            ProtocolError::InvalidTransition {
+                expected: "catalog.snapshot",
+                actual: envelope.body.name(),
+            }
+        })
     }
 
     pub fn keyframe_request(&mut self) -> Result<Envelope, ProtocolError> {
@@ -2082,6 +2178,46 @@ mod tests {
                 .unwrap();
         assert_eq!(hex::encode(keys.client_to_host()), vector.client_to_host);
         assert_eq!(hex::encode(keys.host_to_client()), vector.host_to_client);
+    }
+
+    #[test]
+    fn catalog_snapshot_round_trips_after_session_open() {
+        let (mut host, mut client, _) = paired();
+        let open = client.open_session(PermissionSet::video_only()).unwrap();
+        let opened = host.handle(&open, 1_000_001).unwrap().unwrap();
+        client.accept_session_opened(&opened).unwrap();
+        let session_id = host.session_id().unwrap().to_string();
+        let window = crate::Window {
+            id: 5,
+            title: Some("Browser".into()),
+            app_id: Some("firefox".into()),
+            pid: Some(42),
+            workspace_id: Some(2),
+            is_focused: false,
+            is_floating: false,
+            is_urgent: false,
+        };
+        let snapshot = crate::catalog_wire::CatalogSnapshot::from_windows(
+            &session_id,
+            Some(session_id.clone()),
+            "niri-test",
+            1,
+            &[window],
+        )
+        .unwrap();
+        let envelope = host.emit_catalog(snapshot.clone()).unwrap();
+        let decoded = client.accept_catalog_snapshot(&envelope).unwrap();
+        assert_eq!(decoded.entries.len(), 1);
+        assert_eq!(decoded.entries[0].window_id, 5);
+        assert_eq!(decoded.entries[0].display_name(), "Browser");
+
+        let mut wrong = snapshot;
+        wrong.connection_epoch = "other-session".into();
+        wrong.session_id = Some("other-session".into());
+        assert_eq!(
+            host.emit_catalog(wrong).unwrap_err(),
+            ProtocolError::SessionMismatch
+        );
     }
 
     #[test]
