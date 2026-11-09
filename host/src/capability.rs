@@ -448,7 +448,10 @@ impl ActionResult {
         }
     }
 
-    fn rejected(request: &ActionRequest, code: ContractErrorCode) -> Self {
+    /// Truthful rejection for a request that was structurally valid but was not
+    /// executed. Used by the transport dispatcher when the control lease, not
+    /// the registry, is the source of the rejection.
+    pub fn rejected(request: &ActionRequest, code: ContractErrorCode) -> Self {
         Self::from_request(request, ActionStatus::Rejected, Some(code), None, None)
     }
 }
@@ -534,6 +537,23 @@ pub trait ActionBackend {
         action: &str,
         parameters: &BTreeMap<String, Value>,
     ) -> Result<BackendOutcome, ContractErrorCode>;
+}
+
+/// Lets a host bind a runtime-selected adapter (for example a Niri backend or a
+/// deterministic test backend) without making the control session generic.
+impl<T: ActionBackend + ?Sized> ActionBackend for Box<T> {
+    fn descriptors(&self) -> Vec<ActionDescriptor> {
+        (**self).descriptors()
+    }
+
+    fn execute(
+        &mut self,
+        target: &TargetRef,
+        action: &str,
+        parameters: &BTreeMap<String, Value>,
+    ) -> Result<BackendOutcome, ContractErrorCode> {
+        (**self).execute(target, action, parameters)
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -31,6 +31,7 @@ fn usage() {
     eprintln!("       vista-host capture-output --confirm [--json]");
     eprintln!("       vista-host pipewire-loopback [--json]");
     eprintln!("       vista-host capability-test [--json]");
+    eprintln!("       vista-host control-dispatch-test [--json]");
     eprintln!("       vista-host protocol-test [--json]");
     eprintln!("       vista-host protocol-loopback [--json]");
     eprintln!(
@@ -537,6 +538,36 @@ fn run() -> Result<(), NiriError> {
         [command, rest @ ..] if command.as_str() == "protocol-client" => {
             let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
             protocol_client(&rest, json)?;
+        }
+        [command] if command.as_str() == "control-dispatch-test" => {
+            eprintln!(
+                "Running the session-bound capability/action dispatch diagnostic through an in-memory pairing; no network, capture or input injection."
+            );
+            let report = vista_host::control_dispatch::diagnostic().map_err(|error| {
+                NiriError::Unavailable(format!("control dispatch diagnostic failed: {error}"))
+            })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Control dispatch verified={}: protocol session={}, snapshot actions={} (grant {}), completed={}, backend calls={}, duplicate cached={}.",
+                    report.verified,
+                    report.protocol_session,
+                    report.snapshot_actions,
+                    report.snapshot_grant_epoch,
+                    report.action_completed,
+                    report.backend_calls,
+                    report.duplicate_cached
+                );
+                println!(
+                    "Rejected: revoked={}, stale grant={}, wrong session={}, wrong target={}, malformed={}.",
+                    report.revoked_rejected,
+                    report.stale_grant_rejected,
+                    report.wrong_session_rejected,
+                    report.wrong_target_rejected,
+                    report.malformed_rejected
+                );
+            }
         }
         [command] if command.as_str() == "capability-test" => {
             eprintln!(

@@ -109,8 +109,15 @@ plus capability updates without reconnect and held-key release.
 and reflects the requested grants (missing grants appear as `required`); it is
 read-only and executes no native action. `ControlLease` owns one session's
 action/input grants: revoke advances the grant epoch, clears the grants and
-releases all held input, while re-grant advances the epoch again. It is not yet
-attached to the network transport or native injector. Shared fixtures
+releases all held input, while re-grant advances the epoch again.
+`HostControlChannel` (`host/src/control_dispatch.rs`) binds the lease to the
+authenticated `HostSession`: it derives the action context from the lease,
+serves the current snapshot and routes `action.invoke` to `action.result`,
+rejecting wrong-session, revoked, stale-grant, wrong-target and malformed
+requests before the backend executes.
+`vista-host control-dispatch-test --json` proves this through a real in-memory
+pairing; `protocol-serve` does not yet attach an action policy or native
+injector. Shared fixtures
 are in `docs/fixtures/capabilities-v1.json`; Swift `Codable` models mirror the
 same shapes. No native input injection, menu retrieval or client UI wiring is
 implemented yet, and the diagnostic does not exercise a live Niri action.
