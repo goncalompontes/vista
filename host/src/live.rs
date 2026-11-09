@@ -24,13 +24,90 @@ use std::{
     time::{Duration, Instant},
 };
 
-const MAX_FRAMES: usize = 8;
-const MAX_DURATION: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(50);
-// A fixed-size encoder input keeps memory use bounded and prevents mixed caps on resize.
-// The source is explicitly scaled; this is not a quality or native-resolution benchmark.
-const WIDTH: u32 = 320;
-const HEIGHT: u32 = 180;
+pub const DEFAULT_SECONDS: u64 = 5;
+pub const MAX_SECONDS: u64 = 120;
+const FRAME_RATE: u64 = 30;
+const MAX_FRAMES: usize = 3_600;
+const MAX_FRAME_DIMENSION: i32 = 8192;
+
+/// Bounded live-capture run configuration. The frame cap and deadline are
+/// independent so a stalled source cannot exceed either bound.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CaptureRun {
+    pub seconds: u64,
+    pub keyframe_at: Option<usize>,
+}
+
+impl Default for CaptureRun {
+    fn default() -> Self {
+        Self {
+            seconds: DEFAULT_SECONDS,
+            keyframe_at: None,
+        }
+    }
+}
+
+impl CaptureRun {
+    pub fn new(seconds: u64, keyframe_at: Option<usize>) -> Result<Self, String> {
+        if seconds == 0 || seconds > MAX_SECONDS {
+            return Err(format!("--seconds must be 1..={MAX_SECONDS}"));
+        }
+        let max_frames = Self::max_frames_for(seconds);
+        if let Some(frame) = keyframe_at
+            && (frame == 0 || frame >= max_frames)
+        {
+            return Err(format!(
+                "--keyframe-at must be 1..{} for a {seconds}-second run",
+                max_frames.saturating_sub(1)
+            ));
+        }
+        Ok(Self {
+            seconds,
+            keyframe_at,
+        })
+    }
+
+    pub fn max_frames(&self) -> usize {
+        Self::max_frames_for(self.seconds)
+    }
+
+    fn max_frames_for(seconds: u64) -> usize {
+        usize::try_from(seconds.saturating_mul(FRAME_RATE))
+            .unwrap_or(MAX_FRAMES)
+            .min(MAX_FRAMES)
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct LatencySummary {
+    pub samples: usize,
+    pub min_ms: f64,
+    pub p50_ms: f64,
+    pub p95_ms: f64,
+    pub max_ms: f64,
+}
+
+impl LatencySummary {
+    pub fn from_samples(mut samples: Vec<f64>) -> Self {
+        if samples.is_empty() {
+            return Self::default();
+        }
+        samples.sort_by(f64::total_cmp);
+        let index = |percent: f64| {
+            let last = samples.len() - 1;
+            let position = ((samples.len() as f64 - 1.0) * percent).round() as usize;
+            samples[position.min(last)]
+        };
+        Self {
+            samples: samples.len(),
+            min_ms: samples[0],
+            p50_ms: index(0.50),
+            p95_ms: index(0.95),
+            max_ms: samples[samples.len() - 1],
+        }
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct LiveBridgeReport {
@@ -38,11 +115,20 @@ pub struct LiveBridgeReport {
     pub pipewire_node_id: u32,
     pub encoder: H264Encoder,
     pub input_frames: usize,
+    pub input_width: u32,
+    pub input_height: u32,
     pub encoded_buffers: usize,
     pub encoded_bytes: usize,
     pub dropped_frames: u64,
     pub dropped_access_units: u64,
     pub elapsed_ms: u128,
+    pub seconds: u64,
+    pub max_frames: usize,
+    pub keyframe_requests: usize,
+    pub keyframes_emitted: usize,
+    /// Raw-sample pull to encoded-buffer availability, including pipeline
+    /// startup in the first samples. This is not network or decoder latency.
+    pub capture_to_encode_ms: LatencySummary,
     pub verified: bool,
     pub arbitrary_window_capture_verified: bool,
 }
@@ -87,16 +173,32 @@ fn pack_rgba_rows(plane: &[u8], stride: usize, width: u32, height: u32) -> Resul
     Ok(packed)
 }
 
-fn validate_rgba(sample: &gst::Sample) -> Result<Vec<u8>, String> {
+struct RgbaFrame {
+    bytes: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+fn validate_rgba(sample: &gst::Sample) -> Result<RgbaFrame, String> {
     let caps = sample.caps().ok_or("raw sample missing caps")?;
     let structure = caps.structure(0).ok_or("raw caps missing structure")?;
+    let width = structure
+        .get::<i32>("width")
+        .map_err(|_| "raw sample missing width")?;
+    let height = structure
+        .get::<i32>("height")
+        .map_err(|_| "raw sample missing height")?;
     if structure.name() != "video/x-raw"
         || structure.get::<&str>("format").ok() != Some("RGBA")
-        || structure.get::<i32>("width").ok() != Some(WIDTH as i32)
-        || structure.get::<i32>("height").ok() != Some(HEIGHT as i32)
+        || width <= 0
+        || height <= 0
+        || width > MAX_FRAME_DIMENSION
+        || height > MAX_FRAME_DIMENSION
     {
         return Err("unexpected raw sample format or geometry".into());
     }
+    let width = u32::try_from(width).map_err(|_| "invalid raw width")?;
+    let height = u32::try_from(height).map_err(|_| "invalid raw height")?;
     let buffer = sample.buffer().ok_or("raw sample missing buffer")?;
     let info = gst_video::VideoInfo::from_caps(caps)
         .map_err(|e| format!("invalid RGBA video layout: {e}"))?;
@@ -107,7 +209,20 @@ fn validate_rgba(sample: &gst::Sample) -> Result<Vec<u8>, String> {
     let plane = frame
         .plane_data(0)
         .map_err(|e| format!("cannot access RGBA plane: {e}"))?;
-    pack_rgba_rows(plane, stride, WIDTH, HEIGHT)
+    Ok(RgbaFrame {
+        bytes: pack_rgba_rows(plane, stride, width, height)?,
+        width,
+        height,
+    })
+}
+
+fn raw_caps(width: u32, height: u32) -> gst::Caps {
+    gst::Caps::builder("video/x-raw")
+        .field("format", "RGBA")
+        .field("width", width as i32)
+        .field("height", height as i32)
+        .field("framerate", gst::Fraction::new(FRAME_RATE as i32, 1))
+        .build()
 }
 
 /// GStreamer often reports source/codec failures asynchronously on the bus
@@ -143,6 +258,7 @@ fn collect_encoded(
     token: SessionToken,
     buffers: &mut usize,
     bytes: &mut usize,
+    keyframes: &mut usize,
 ) -> Result<(), String> {
     let caps = sample.caps().ok_or("encoded sample missing caps")?;
     let structure = caps
@@ -167,16 +283,20 @@ fn collect_encoded(
             .mark_h264_discontinuity(token, H264Discontinuity::Pipeline)
             .map_err(|e| format!("encoded session rejected discontinuity: {e:?}"))?;
     }
+    let is_keyframe = !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT);
     session
         .enqueue_h264(
             token,
             H264AccessUnit {
                 pts_ns: buffer.pts().map(|pts| pts.nseconds()),
-                is_keyframe: !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT),
+                is_keyframe,
                 bytes: mapped.as_slice().to_vec(),
             },
         )
         .map_err(|e| format!("encoded session rejected access unit: {e:?}"))?;
+    if is_keyframe {
+        *keyframes += 1;
+    }
     *buffers += 1;
     *bytes += len;
     Ok(())
@@ -188,9 +308,10 @@ fn drain_encoded(
     token: SessionToken,
     buffers: &mut usize,
     bytes: &mut usize,
+    keyframes: &mut usize,
 ) -> Result<(), String> {
     while let Some(sample) = sink.try_pull_sample(gst::ClockTime::ZERO) {
-        collect_encoded(&sample, session, token, buffers, bytes)?;
+        collect_encoded(&sample, session, token, buffers, bytes, keyframes)?;
     }
     Ok(())
 }
@@ -203,9 +324,10 @@ fn bridge_pipeline(
     node: u32,
     cancelled: &AtomicBool,
     watcher: Option<&WindowWatcher>,
+    run: CaptureRun,
 ) -> Result<LiveBridgeReport, String> {
     let target = pipeline(&format!(
-        "appsrc name=raw_source is-live=true format=time caps=video/x-raw,format=RGBA,width={WIDTH},height={HEIGHT},framerate=30/1 ! queue max-size-buffers=2 leaky=downstream ! videoconvert ! {} {} ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au ! appsink name=encoded_sink sync=false max-buffers=2 drop=false",
+        "appsrc name=raw_source is-live=true format=time caps=video/x-raw,format=RGBA,framerate=30/1 ! queue max-size-buffers=2 leaky=downstream ! videoconvert ! {} {} ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au ! appsink name=encoded_sink sync=false max-buffers=2 drop=false",
         encoder.element_name(),
         encode_settings(encoder)
     ))?;
@@ -231,32 +353,63 @@ fn bridge_pipeline(
         let token = session.authorize().map_err(|e| format!("{e:?}"))?;
         session.start(token).map_err(|e| format!("{e:?}"))?;
         let start = Instant::now();
-        let deadline = start + MAX_DURATION;
-        target
-            .set_state(gst::State::Playing)
-            .map_err(|e| format!("cannot start encoder: {e}"))?;
+        let deadline = start + Duration::from_secs(run.seconds);
         source
             .set_state(gst::State::Playing)
             .map_err(|e| format!("cannot start source: {e}"))?;
         let mut input_frames = 0;
         let mut encoded_buffers = 0;
         let mut encoded_bytes = 0;
-        let geometry = FrameGeometry {
-            width: WIDTH,
-            height: HEIGHT,
-        };
-        while input_frames < MAX_FRAMES && Instant::now() < deadline {
+        let mut keyframe_requests = 0;
+        let mut keyframes_emitted = 0;
+        let mut capture_latency = Vec::new();
+        let mut geometry: Option<FrameGeometry> = None;
+        let mut input_width = 0u32;
+        let mut input_height = 0u32;
+        while input_frames < run.max_frames() && Instant::now() < deadline {
             if let Some(reason) = interruption(cancelled, watcher) {
                 session.revoke();
                 return Err(reason);
+            }
+            if run.keyframe_at == Some(input_frames) && keyframe_requests == 0 {
+                let event = gst_video::DownstreamForceKeyUnitEvent::builder()
+                    .all_headers(true)
+                    .build();
+                if !appsrc.send_event(event) {
+                    return Err("encoder rejected force-key-unit event".into());
+                }
+                session
+                    .mark_h264_discontinuity(token, H264Discontinuity::ReceiverReset)
+                    .map_err(|e| format!("session rejected keyframe request: {e:?}"))?;
+                keyframe_requests += 1;
             }
             check_capture_errors(source, &target)?;
             let wait = deadline.saturating_duration_since(Instant::now()).min(POLL);
             let ns = u64::try_from(wait.as_nanos()).unwrap_or(u64::MAX);
             if let Some(sample) = raw_sink.try_pull_sample(gst::ClockTime::from_nseconds(ns)) {
+                let pulled_at = Instant::now();
                 let frame = validate_rgba(&sample)?;
+                let frame_geometry = FrameGeometry {
+                    width: frame.width,
+                    height: frame.height,
+                };
+                if geometry != Some(frame_geometry) {
+                    if geometry.is_some() {
+                        session
+                            .resize(token, frame_geometry)
+                            .map_err(|e| format!("{e:?}"))?;
+                    } else {
+                        target
+                            .set_state(gst::State::Playing)
+                            .map_err(|e| format!("cannot start encoder: {e}"))?;
+                    }
+                    appsrc.set_caps(Some(&raw_caps(frame.width, frame.height)));
+                    geometry = Some(frame_geometry);
+                    input_width = frame.width;
+                    input_height = frame.height;
+                }
                 session
-                    .enqueue_rgba(token, geometry, frame)
+                    .enqueue_rgba(token, frame_geometry, frame.bytes)
                     .map_err(|e| format!("{e:?}"))?;
                 input_frames += 1;
                 if let Some(reason) = interruption(cancelled, watcher) {
@@ -272,21 +425,22 @@ fn bridge_pipeline(
                         .push_buffer(buffer)
                         .map_err(|e| format!("encoder rejected frame: {e}"))?;
                 }
+                let before = encoded_buffers;
                 drain_encoded(
                     &encoded_sink,
                     &mut session,
                     token,
                     &mut encoded_buffers,
                     &mut encoded_bytes,
+                    &mut keyframes_emitted,
                 )?;
+                if encoded_buffers > before {
+                    capture_latency.push(pulled_at.elapsed().as_secs_f64() * 1000.0);
+                }
             } else if raw_sink.is_eos() {
                 break;
             }
             check_capture_errors(source, &target)?;
-        }
-        if cancelled.load(Ordering::Acquire) {
-            session.revoke();
-            return Err("portal session closed during capture".into());
         }
         if let Some(reason) = interruption(cancelled, watcher) {
             session.revoke();
@@ -296,14 +450,17 @@ fn bridge_pipeline(
         appsrc
             .end_of_stream()
             .map_err(|e| format!("cannot signal encoder EOS: {e}"))?;
-        // The overall deadline also bounds encoder draining.
-        while Instant::now() < deadline && !encoded_sink.is_eos() {
+        // Encoding may lag the capture deadline; give bounded time to drain.
+        let drain_deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < drain_deadline && !encoded_sink.is_eos() {
             if let Some(reason) = interruption(cancelled, watcher) {
                 session.revoke();
                 return Err(reason);
             }
             check_capture_errors(source, &target)?;
-            let wait = deadline.saturating_duration_since(Instant::now()).min(POLL);
+            let wait = drain_deadline
+                .saturating_duration_since(Instant::now())
+                .min(POLL);
             let ns = u64::try_from(wait.as_nanos()).unwrap_or(u64::MAX);
             if let Some(sample) = encoded_sink.try_pull_sample(gst::ClockTime::from_nseconds(ns)) {
                 collect_encoded(
@@ -312,6 +469,7 @@ fn bridge_pipeline(
                     token,
                     &mut encoded_buffers,
                     &mut encoded_bytes,
+                    &mut keyframes_emitted,
                 )?;
             }
         }
@@ -321,6 +479,7 @@ fn bridge_pipeline(
             token,
             &mut encoded_buffers,
             &mut encoded_bytes,
+            &mut keyframes_emitted,
         )?;
         check_capture_errors(source, &target)?;
         if input_frames == 0 || encoded_buffers == 0 {
@@ -341,11 +500,18 @@ fn bridge_pipeline(
             pipewire_node_id: node,
             encoder,
             input_frames,
+            input_width,
+            input_height,
             encoded_buffers,
             encoded_bytes,
             dropped_frames: session.dropped_frames(),
             dropped_access_units: session.dropped_access_units(),
             elapsed_ms: start.elapsed().as_millis(),
+            seconds: run.seconds,
+            max_frames: run.max_frames(),
+            keyframe_requests,
+            keyframes_emitted,
+            capture_to_encode_ms: LatencySummary::from_samples(capture_latency),
             verified: true,
             arbitrary_window_capture_verified: false,
         };
@@ -383,6 +549,7 @@ fn run_worker(
     node: u32,
     cancelled: &AtomicBool,
     window_id: Option<u64>,
+    run: CaptureRun,
 ) -> Result<LiveBridgeReport, String> {
     gst::init().map_err(|e| format!("GStreamer initialization: {e}"))?;
     let caps = probe_encoders()?;
@@ -397,7 +564,7 @@ fn run_worker(
     };
     // The PipeWire FD remains open for the complete lifetime of the source pipeline.
     let source = pipeline(&format!(
-        "pipewiresrc fd={} target-object={node} do-timestamp=true ! videoconvert ! videoscale ! video/x-raw,format=RGBA,width={WIDTH},height={HEIGHT} ! appsink name=raw_sink sync=false max-buffers=2 drop=true",
+        "pipewiresrc fd={} target-object={node} do-timestamp=true ! videoconvert ! video/x-raw,format=RGBA ! appsink name=raw_sink sync=false max-buffers=2 drop=true",
         fd.as_raw_fd()
     ))?;
     let mut failures = Vec::new();
@@ -420,7 +587,7 @@ fn run_worker(
                 watcher.reason().unwrap_or("unknown")
             ));
         }
-        match bridge_pipeline(&source, encoder, node, cancelled, watcher.as_ref()) {
+        match bridge_pipeline(&source, encoder, node, cancelled, watcher.as_ref(), run) {
             Ok(report) => return Ok(report),
             Err(err) if cancelled.load(Ordering::Acquire) => return Err(err),
             Err(err) => failures.push(format!("{}: {err}", encoder.element_name())),
@@ -443,6 +610,15 @@ pub async fn capture_h264_probe() -> Result<LiveBridgeReport, String> {
 /// compositor restart terminates capture instead of waiting for a timeout.
 pub async fn capture_h264_probe_for_window(
     window_id: Option<u64>,
+) -> Result<LiveBridgeReport, String> {
+    capture_h264_probe_with(window_id, CaptureRun::default()).await
+}
+
+/// Bounded run with explicit duration and an optional keyframe request at a
+/// given input-frame index.
+pub async fn capture_h264_probe_with(
+    window_id: Option<u64>,
+    run: CaptureRun,
 ) -> Result<LiveBridgeReport, String> {
     let portal = Screencast::new().await.map_err(|e| e.to_string())?;
     let session = portal
@@ -479,29 +655,64 @@ pub async fn capture_h264_probe_for_window(
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_flag = cancelled.clone();
         // Subscribe before starting capture so permission revocation is observed.
-        let closed = session.receive_closed().await.map_err(|e| e.to_string())?;
-        let worker =
-            tokio::task::spawn_blocking(move || run_worker(fd, node, &worker_flag, window_id));
-        tokio::pin!(closed);
-        tokio::pin!(worker);
-        tokio::select! {
-            // If a frame result and revocation become ready together, never
-            // claim successful capture after the portal has closed the grant.
-            biased;
-            _ = closed.next() => {
-                cancelled.store(true, Ordering::Release);
-                let _ = worker.await;
-                Err("portal closed the authorized window session".into())
+        // Some portal implementations do not answer the signal subscription; a
+        // bounded wait keeps capture usable while reporting the reduced coverage.
+        let closed = match tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            session.receive_closed(),
+        )
+        .await
+        {
+            Ok(Ok(stream)) => Some(stream),
+            Ok(Err(error)) => {
+                return Err(format!("cannot subscribe to portal session closure: {error}"));
             }
-            result = &mut worker => result.map_err(|e| format!("capture worker panicked: {e}"))?,
+            Err(_) => {
+                eprintln!(
+                    "portal did not answer the Closed signal subscription within 2 s; continuing without portal-revocation monitoring for this run"
+                );
+                None
+            }
+        };
+        let worker =
+            tokio::task::spawn_blocking(move || run_worker(fd, node, &worker_flag, window_id, run));
+        tokio::pin!(worker);
+        match closed {
+            Some(closed) => {
+                tokio::pin!(closed);
+                tokio::select! {
+                    // If a frame result and revocation become ready together, never
+                    // claim successful capture after the portal has closed the grant.
+                    biased;
+                    _ = closed.next() => {
+                        cancelled.store(true, Ordering::Release);
+                        let _ = worker.await;
+                        Err("portal closed the authorized window session".into())
+                    }
+                    result = &mut worker => result.map_err(|e| format!("capture worker panicked: {e}"))?,
+                }
+            }
+            None => worker
+                .await
+                .map_err(|e| format!("capture worker panicked: {e}"))?,
         }
     }
     .await;
-    let close = session.close().await.map_err(|e| e.to_string());
+    let close = match tokio::time::timeout(std::time::Duration::from_secs(2), session.close()).await
+    {
+        Ok(result) => Some(result.map_err(|e| e.to_string())),
+        Err(_) => {
+            eprintln!(
+                "portal did not acknowledge session close within 2 s; the grant may be released by the portal after this diagnostic exits"
+            );
+            None
+        }
+    };
     match (result, close) {
-        (Ok(report), Ok(())) => Ok(report),
+        (Ok(report), None) => Ok(report),
+        (Ok(report), Some(Ok(()))) => Ok(report),
         (Err(err), _) => Err(err),
-        (Ok(_), Err(err)) => Err(format!("could not close portal session: {err}")),
+        (Ok(_), Some(Err(err))) => Err(format!("could not close portal session: {err}")),
     }
 }
 
@@ -524,17 +735,81 @@ mod tests {
         buffer
             .get_mut()
             .unwrap()
-            .set_flags(gst::BufferFlags::DISCONT);
+            .set_flags(gst::BufferFlags::DISCONT | gst::BufferFlags::DELTA_UNIT);
         let sample = gst::Sample::builder().buffer(&buffer).caps(&caps).build();
-        let (mut buffers, mut bytes) = (0, 0);
-        collect_encoded(&sample, &mut session, token, &mut buffers, &mut bytes).unwrap();
+        let (mut buffers, mut bytes, mut keyframes) = (0, 0, 0);
+        collect_encoded(
+            &sample,
+            &mut session,
+            token,
+            &mut buffers,
+            &mut bytes,
+            &mut keyframes,
+        )
+        .unwrap();
         assert_eq!(buffers, 1);
         assert_eq!(bytes, 6);
+        assert_eq!(keyframes, 0);
         assert_eq!(session.queued_access_units(), 1);
         assert_eq!(
             session.h264_continuity(token).unwrap(),
             (before + 1, H264Discontinuity::Pipeline)
         );
+    }
+
+    #[test]
+    fn latency_summary_sorts_and_selects_percentiles() {
+        assert_eq!(LatencySummary::from_samples(Vec::new()).samples, 0);
+        let summary = LatencySummary::from_samples(vec![5.0, 1.0, 3.0, 2.0, 4.0]);
+        assert_eq!(summary.samples, 5);
+        assert_eq!(summary.min_ms, 1.0);
+        assert_eq!(summary.p50_ms, 3.0);
+        assert_eq!(summary.p95_ms, 5.0);
+        assert_eq!(summary.max_ms, 5.0);
+        let single = LatencySummary::from_samples(vec![7.5]);
+        assert_eq!(single.p50_ms, 7.5);
+        assert_eq!(single.p95_ms, 7.5);
+    }
+
+    #[test]
+    fn capture_run_bounds_seconds_and_keyframe_index() {
+        assert!(CaptureRun::new(0, None).is_err());
+        assert!(CaptureRun::new(MAX_SECONDS + 1, None).is_err());
+        assert!(CaptureRun::new(1, Some(0)).is_err());
+        assert!(CaptureRun::new(1, Some(30)).is_err());
+        let run = CaptureRun::new(2, Some(1)).unwrap();
+        assert_eq!(run.max_frames(), 60);
+        assert_eq!(run.seconds, 2);
+        assert_eq!(CaptureRun::default().seconds, DEFAULT_SECONDS);
+        assert_eq!(
+            CaptureRun::new(MAX_SECONDS, None).unwrap().max_frames(),
+            MAX_FRAMES
+        );
+    }
+
+    #[test]
+    fn keyframe_flagged_sample_is_counted() {
+        gst::init().unwrap();
+        let mut session = StreamSession::new();
+        let token = session.authorize().unwrap();
+        session.start(token).unwrap();
+        let caps = gst::Caps::builder("video/x-h264")
+            .field("stream-format", "byte-stream")
+            .field("alignment", "au")
+            .build();
+        let buffer = gst::Buffer::from_mut_slice(vec![0, 0, 0, 1, 0x67, 0x42]);
+        let sample = gst::Sample::builder().buffer(&buffer).caps(&caps).build();
+        let (mut buffers, mut bytes, mut keyframes) = (0, 0, 0);
+        collect_encoded(
+            &sample,
+            &mut session,
+            token,
+            &mut buffers,
+            &mut bytes,
+            &mut keyframes,
+        )
+        .unwrap();
+        assert_eq!(keyframes, 1);
     }
 
     #[test]
@@ -560,7 +835,7 @@ mod tests {
         assert!(pack_rgba_rows(&[], 0, u32::MAX, u32::MAX).is_err());
     }
     #[test]
-    fn rejects_unexpected_raw_geometry() {
+    fn accepts_native_rgba_geometry_and_rejects_bad_format() {
         gst::init().unwrap();
         let caps = gst::Caps::builder("video/x-raw")
             .field("format", "RGBA")
@@ -570,6 +845,30 @@ mod tests {
         let sample = gst::Sample::builder()
             .buffer(&gst::Buffer::with_size(64 * 64 * 4).unwrap())
             .caps(&caps)
+            .build();
+        let frame = validate_rgba(&sample).unwrap();
+        assert_eq!((frame.width, frame.height), (64, 64));
+        assert_eq!(frame.bytes.len(), 64 * 64 * 4);
+
+        let bad_format = gst::Caps::builder("video/x-raw")
+            .field("format", "RGB")
+            .field("width", 64i32)
+            .field("height", 64i32)
+            .build();
+        let sample = gst::Sample::builder()
+            .buffer(&gst::Buffer::with_size(64 * 64 * 3).unwrap())
+            .caps(&bad_format)
+            .build();
+        assert!(validate_rgba(&sample).is_err());
+
+        let zero = gst::Caps::builder("video/x-raw")
+            .field("format", "RGBA")
+            .field("width", 0i32)
+            .field("height", 0i32)
+            .build();
+        let sample = gst::Sample::builder()
+            .buffer(&gst::Buffer::with_size(0).unwrap())
+            .caps(&zero)
             .build();
         assert!(validate_rgba(&sample).is_err());
     }
@@ -611,7 +910,8 @@ mod tests {
         )
         .unwrap();
         let cancelled = AtomicBool::new(false);
-        let error = bridge_pipeline(&source, encoder, 0, &cancelled, None).unwrap_err();
+        let error = bridge_pipeline(&source, encoder, 0, &cancelled, None, CaptureRun::default())
+            .unwrap_err();
         assert!(error.contains("capture source pipeline error"), "{error}");
         assert_eq!(source.current_state(), gst::State::Null);
     }
@@ -633,7 +933,8 @@ mod tests {
             "videotestsrc num-buffers=8 is-live=true ! videoconvert ! video/x-raw,format=RGBA,width=320,height=180 ! appsink name=raw_sink sync=false max-buffers=2 drop=true"
         ).unwrap();
         let cancelled = AtomicBool::new(false);
-        let result = bridge_pipeline(&source, encoder, 0, &cancelled, None).unwrap();
+        let result =
+            bridge_pipeline(&source, encoder, 0, &cancelled, None, CaptureRun::default()).unwrap();
         assert_eq!(result.input_frames, 8);
         assert!(result.encoded_buffers > 0);
     }
@@ -661,7 +962,9 @@ mod tests {
                 cancelled.store(true, Ordering::Release);
             });
             let start = Instant::now();
-            let error = bridge_pipeline(&source, encoder, 0, &cancelled, None).unwrap_err();
+            let error =
+                bridge_pipeline(&source, encoder, 0, &cancelled, None, CaptureRun::default())
+                    .unwrap_err();
             assert!(error.contains("portal session closed"), "{error}");
             assert!(start.elapsed() < Duration::from_secs(2));
         });
@@ -685,7 +988,8 @@ mod tests {
             "videotestsrc num-buffers=8 is-live=true ! videoconvert ! video/x-raw,format=RGBA,width=320,height=180 ! appsink name=raw_sink sync=false max-buffers=2 drop=true"
         ).unwrap();
         let cancelled = AtomicBool::new(true);
-        let error = bridge_pipeline(&source, encoder, 0, &cancelled, None).unwrap_err();
+        let error = bridge_pipeline(&source, encoder, 0, &cancelled, None, CaptureRun::default())
+            .unwrap_err();
         assert!(error.contains("portal session closed"), "{error}");
         assert_eq!(source.current_state(), gst::State::Null);
     }

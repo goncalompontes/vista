@@ -20,6 +20,36 @@ fn h264_capture_requires_explicit_confirmation() {
 }
 
 #[test]
+fn h264_capture_rejects_invalid_run_bounds_without_prompting() {
+    for (args, expected) in [
+        (
+            vec!["capture-h264", "--confirm", "--seconds", "0"],
+            "--seconds",
+        ),
+        (
+            vec!["capture-h264", "--confirm", "--seconds", "999"],
+            "--seconds",
+        ),
+        (
+            vec!["capture-h264", "--confirm", "--keyframe-at", "0"],
+            "--keyframe-at",
+        ),
+        (
+            vec!["capture-h264", "--confirm", "--window", "nope"],
+            "--window",
+        ),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_vista-host"))
+            .args(args)
+            .output()
+            .expect("launch host binary");
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected), "{stderr}");
+    }
+}
+
+#[test]
 fn bridge_test_rejects_unexpected_arguments() {
     let output = Command::new(env!("CARGO_BIN_EXE_vista-host"))
         .args(["bridge-test", "--confirm"])

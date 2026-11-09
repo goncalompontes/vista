@@ -27,7 +27,9 @@ fn usage() {
         "       vista-host media-stream --serve [--listen ADDR] [--frames N] | --connect ADDR --key-hex HEX --session-id ID [--json]"
     );
     eprintln!("       vista-host keyframe-control-test [--json]");
-    eprintln!("       vista-host capture-h264 --confirm [--window ID] [--json]");
+    eprintln!(
+        "       vista-host capture-h264 --confirm [--window ID] [--seconds N] [--keyframe-at N] [--json]"
+    );
     eprintln!("       vista-host capture-output --confirm [--json]");
     eprintln!("       vista-host pipewire-loopback [--json]");
     eprintln!("       vista-host capability-test [--json]");
@@ -324,17 +326,80 @@ fn run() -> Result<(), NiriError> {
                 );
             }
         }
-        [command, confirm]
-            if command.as_str() == "capture-h264" && confirm.as_str() == "--confirm" =>
-        {
+        [command, rest @ ..] if command.as_str() == "capture-h264" && !rest.is_empty() => {
+            let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
+            let mut confirm = false;
+            let mut window_id = None;
+            let mut seconds = vista_host::live::DEFAULT_SECONDS;
+            let mut keyframe_at = None;
+            let mut index = 0;
+            while index < rest.len() {
+                match rest[index] {
+                    "--confirm" => {
+                        confirm = true;
+                        index += 1;
+                    }
+                    flag @ ("--window" | "--seconds" | "--keyframe-at") => {
+                        let value = rest.get(index + 1).ok_or_else(|| {
+                            NiriError::InvalidArgument(format!("{flag} requires a value"))
+                        })?;
+                        match flag {
+                            "--window" => {
+                                window_id = Some(value.parse::<u64>().map_err(|_| {
+                                    NiriError::InvalidArgument("--window must be an integer".into())
+                                })?)
+                            }
+                            "--seconds" => {
+                                seconds = value.parse::<u64>().map_err(|_| {
+                                    NiriError::InvalidArgument(
+                                        "--seconds must be an integer".into(),
+                                    )
+                                })?
+                            }
+                            _ => {
+                                keyframe_at = Some(value.parse::<usize>().map_err(|_| {
+                                    NiriError::InvalidArgument(
+                                        "--keyframe-at must be an integer".into(),
+                                    )
+                                })?)
+                            }
+                        }
+                        index += 2;
+                    }
+                    other => {
+                        usage();
+                        return Err(NiriError::InvalidArgument(format!(
+                            "unknown command {other}"
+                        )));
+                    }
+                }
+            }
+            if !confirm {
+                usage();
+                return Err(NiriError::InvalidArgument(
+                    "capture-h264 --confirm [--window ID] [--seconds N] [--keyframe-at N] is required".into(),
+                ));
+            }
+            let run = vista_host::live::CaptureRun::new(seconds, keyframe_at)
+                .map_err(NiriError::InvalidArgument)?;
             eprintln!(
-                "Vista will request one window and briefly encode its frames in memory. No video is saved or transmitted; permissions are not persisted."
+                "Vista will request one window and encode at most {} frames for up to {} s in memory. No video is saved or transmitted; permissions are not persisted.",
+                run.max_frames(),
+                run.seconds
             );
+            if let Some(id) = window_id {
+                eprintln!(
+                    "Watching Niri window {id}; removal or a compositor restart terminates capture."
+                );
+            }
+            if let Some(frame) = keyframe_at {
+                eprintln!("Requesting one keyframe at input frame {frame}.");
+            }
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
             let report = runtime
-                .block_on(vista_host::live::capture_h264_probe())
+                .block_on(vista_host::live::capture_h264_probe_with(window_id, run))
                 .map_err(|err| {
                     NiriError::Unavailable(format!(
                         "ScreenCast H.264 diagnostic failed or was cancelled: {err}"
@@ -344,56 +409,24 @@ fn run() -> Result<(), NiriError> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!(
-                    "Encoded {} selected-window frames into {} H.264 buffers ({} bytes) in {} ms with {:?}; no pixels were saved or transmitted.",
+                    "Encoded {} selected-window frames at {}x{} into {} H.264 buffers ({} bytes) in {} ms with {:?}; no pixels were saved or transmitted.",
                     report.input_frames,
+                    report.input_width,
+                    report.input_height,
                     report.encoded_buffers,
                     report.encoded_bytes,
                     report.elapsed_ms,
                     report.encoder
+                );
+                println!(
+                    "Keyframe requests={}, keyframes emitted={}; capture-to-encode p50={:.2} ms, p95={:.2} ms over {} samples.",
+                    report.keyframe_requests,
+                    report.keyframes_emitted,
+                    report.capture_to_encode_ms.p50_ms,
+                    report.capture_to_encode_ms.p95_ms,
+                    report.capture_to_encode_ms.samples
                 );
                 println!("Arbitrary Niri window-ID capture remains unverified.");
-            }
-        }
-        [command, confirm, flag, id]
-            if command.as_str() == "capture-h264"
-                && confirm.as_str() == "--confirm"
-                && flag.as_str() == "--window" =>
-        {
-            let window_id = id
-                .parse::<u64>()
-                .map_err(|_| NiriError::InvalidArgument("--window must be an integer".into()))?;
-            eprintln!(
-                "Vista will request one window and briefly encode its frames in memory. No video is saved or transmitted; permissions are not persisted."
-            );
-            eprintln!(
-                "Watching Niri window {window_id}; removal or a compositor restart terminates capture."
-            );
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            let report = runtime
-                .block_on(vista_host::live::capture_h264_probe_for_window(Some(
-                    window_id,
-                )))
-                .map_err(|err| {
-                    NiriError::Unavailable(format!(
-                        "ScreenCast H.264 diagnostic failed or was cancelled: {err}"
-                    ))
-                })?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                println!(
-                    "Encoded {} selected-window frames into {} H.264 buffers ({} bytes) in {} ms with {:?}; no pixels were saved or transmitted.",
-                    report.input_frames,
-                    report.encoded_buffers,
-                    report.encoded_bytes,
-                    report.elapsed_ms,
-                    report.encoder
-                );
-                println!(
-                    "Window {window_id} was watched for removal; no pixels were saved or transmitted."
-                );
             }
         }
         [command] if command.as_str() == "pipewire-loopback" => {
