@@ -7,6 +7,9 @@ struct StreamPreviewView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 22) {
+#if canImport(VideoToolbox) && !SKIP
+                VideoStreamView()
+#else
                 ZStack {
                     RoundedRectangle(cornerRadius: 25)
                         .fill(VistaPalette.surface)
@@ -26,6 +29,7 @@ struct StreamPreviewView: View {
                     .padding(25)
                 }
                 .aspectRatio(1.25, contentMode: .fit)
+#endif
 
                 VStack(alignment: .leading, spacing: 10) {
                     Text(application.name)
@@ -34,7 +38,7 @@ struct StreamPreviewView: View {
                     Text(application.source.description)
                         .font(.subheadline)
                         .foregroundStyle(VistaPalette.accent)
-                    Text("This screen previews Vista's app session layout. No pixels, audio, clipboard data or input are transmitted.")
+                    Text("The decoder self-test encodes synthetic frames locally. Live host video, audio, clipboard data and input are not connected yet.")
                         .font(.subheadline)
                         .foregroundStyle(VistaPalette.subtleText)
                 }
