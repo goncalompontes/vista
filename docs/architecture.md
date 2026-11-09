@@ -116,8 +116,11 @@ serves the current snapshot and routes `action.invoke` to `action.result`,
 rejecting wrong-session, revoked, stale-grant, wrong-target and malformed
 requests before the backend executes.
 `vista-host control-dispatch-test --json` proves this through a real in-memory
-pairing; `protocol-serve` does not yet attach an action policy or native
-injector. Shared fixtures
+pairing. `protocol-serve --window ID` with explicit `--allow-*` grants now
+attaches the same dispatcher to the encrypted one-shot listener, pushes the
+snapshot and routes one client action (`protocol-client --action ID`); it still
+has no native input injector.
+Shared fixtures
 are in `docs/fixtures/capabilities-v1.json`; Swift `Codable` models mirror the
 same shapes. No native input injection, menu retrieval or client UI wiring is
 implemented yet, and the diagnostic does not exercise a live Niri action.
