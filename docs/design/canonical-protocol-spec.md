@@ -120,7 +120,7 @@ Input edges are reliable ordered, validated for sequence/lease/grant and dedupli
 
 ## Open technical decisions requiring an explicit review
 
-- Exact identity mechanism for paired reconnect (mTLS vs reviewed proof-of-possession over pinned TLS) and binding semantics (#59).
+- Confirm the selected ADR 0003 CSR/mTLS identity enrollment works with real iOS SecIdentity and Android Keystore/KeyManager, then approve it; no alternate challenge login without a new security ADR (#59).
 - Whether input motion gets a separate unreliable channel; start reliable control/edges, benchmark before enabling motion optimization (#58/#65).
 - Initial catalogue pagination versus a clearly bounded snapshot and fail-closed error.
 - Clipboard maximum and feature rollout based on iOS/Android OS policies.
