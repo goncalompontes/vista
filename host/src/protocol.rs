@@ -99,7 +99,7 @@ impl PermissionSet {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
     /// Strictly increasing per direction and starting at zero.
     pub seq: u64,
@@ -123,7 +123,7 @@ impl Envelope {
 
 /// Version 1 control messages. JSON field names are stable and intended to map
 /// directly to Swift `Codable` types. Binary values are lowercase hex strings.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlMessage {
     ClientHello {
@@ -177,6 +177,52 @@ pub enum ControlMessage {
         code: String,
         message: String,
     },
+    /// Capability/action contract messages carried over the authenticated control
+    /// channel. The capability module owns validation; these variants only
+    /// define the wire shape so the contract is not limited to a local diagnostic.
+    #[serde(rename = "capabilities.snapshot")]
+    CapabilitySnapshot {
+        v: u16,
+        connection_epoch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        target_id: String,
+        target_generation: String,
+        capability_revision: u64,
+        grant_epoch: String,
+        actions: Vec<crate::capability::ActionDescriptor>,
+    },
+    #[serde(rename = "action.invoke")]
+    ActionInvoke {
+        v: u16,
+        id: String,
+        connection_epoch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        grant_epoch: String,
+        target_id: String,
+        target_generation: String,
+        capability_revision: u64,
+        action: String,
+        schema_version: u16,
+        #[serde(default)]
+        parameters: std::collections::BTreeMap<String, serde_json::Value>,
+    },
+    #[serde(rename = "action.result")]
+    ActionResult {
+        v: u16,
+        id: String,
+        connection_epoch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        status: crate::capability::ActionStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_code: Option<crate::capability::ContractErrorCode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capability_revision: Option<u64>,
+    },
 }
 
 impl ControlMessage {
@@ -194,7 +240,170 @@ impl ControlMessage {
             Self::Pong { .. } => "pong",
             Self::SessionClose { .. } => "session_close",
             Self::Error { .. } => "error",
+            Self::CapabilitySnapshot { .. } => "capabilities.snapshot",
+            Self::ActionInvoke { .. } => "action.invoke",
+            Self::ActionResult { .. } => "action.result",
         }
+    }
+}
+
+impl From<crate::capability::CapabilitySnapshot> for ControlMessage {
+    fn from(snapshot: crate::capability::CapabilitySnapshot) -> Self {
+        Self::CapabilitySnapshot {
+            v: snapshot.v,
+            connection_epoch: snapshot.connection_epoch,
+            session_id: snapshot.session_id,
+            target_id: snapshot.target_id,
+            target_generation: snapshot.target_generation,
+            capability_revision: snapshot.capability_revision,
+            grant_epoch: snapshot.grant_epoch,
+            actions: snapshot.actions,
+        }
+    }
+}
+
+impl TryFrom<&ControlMessage> for crate::capability::CapabilitySnapshot {
+    type Error = crate::capability::ContractError;
+
+    fn try_from(message: &ControlMessage) -> Result<Self, Self::Error> {
+        let ControlMessage::CapabilitySnapshot {
+            v,
+            connection_epoch,
+            session_id,
+            target_id,
+            target_generation,
+            capability_revision,
+            grant_epoch,
+            actions,
+        } = message
+        else {
+            return Err(crate::capability::ContractError::new(
+                crate::capability::ContractErrorCode::MalformedMessage,
+                "not a capabilities.snapshot message",
+            ));
+        };
+        let snapshot = crate::capability::CapabilitySnapshot {
+            v: *v,
+            message_type: crate::capability::SNAPSHOT_MESSAGE_TYPE.into(),
+            connection_epoch: connection_epoch.clone(),
+            session_id: session_id.clone(),
+            target_id: target_id.clone(),
+            target_generation: target_generation.clone(),
+            capability_revision: *capability_revision,
+            grant_epoch: grant_epoch.clone(),
+            actions: actions.clone(),
+        };
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+}
+
+impl From<crate::capability::ActionRequest> for ControlMessage {
+    fn from(request: crate::capability::ActionRequest) -> Self {
+        Self::ActionInvoke {
+            v: request.v,
+            id: request.id,
+            connection_epoch: request.connection_epoch,
+            session_id: request.session_id,
+            grant_epoch: request.grant_epoch,
+            target_id: request.target_id,
+            target_generation: request.target_generation,
+            capability_revision: request.capability_revision,
+            action: request.action,
+            schema_version: request.schema_version,
+            parameters: request.parameters,
+        }
+    }
+}
+
+impl TryFrom<&ControlMessage> for crate::capability::ActionRequest {
+    type Error = crate::capability::ContractError;
+
+    fn try_from(message: &ControlMessage) -> Result<Self, Self::Error> {
+        let ControlMessage::ActionInvoke {
+            v,
+            id,
+            connection_epoch,
+            session_id,
+            grant_epoch,
+            target_id,
+            target_generation,
+            capability_revision,
+            action,
+            schema_version,
+            parameters,
+        } = message
+        else {
+            return Err(crate::capability::ContractError::new(
+                crate::capability::ContractErrorCode::MalformedMessage,
+                "not an action.invoke message",
+            ));
+        };
+        let request = crate::capability::ActionRequest {
+            v: *v,
+            message_type: crate::capability::ACTION_REQUEST_MESSAGE_TYPE.into(),
+            id: id.clone(),
+            connection_epoch: connection_epoch.clone(),
+            session_id: session_id.clone(),
+            grant_epoch: grant_epoch.clone(),
+            target_id: target_id.clone(),
+            target_generation: target_generation.clone(),
+            capability_revision: *capability_revision,
+            action: action.clone(),
+            schema_version: *schema_version,
+            parameters: parameters.clone(),
+        };
+        request.validate()?;
+        Ok(request)
+    }
+}
+
+impl From<crate::capability::ActionResult> for ControlMessage {
+    fn from(result: crate::capability::ActionResult) -> Self {
+        Self::ActionResult {
+            v: result.v,
+            id: result.id,
+            connection_epoch: result.connection_epoch,
+            session_id: result.session_id,
+            status: result.status,
+            error_code: result.error_code,
+            state: result.state,
+            capability_revision: result.capability_revision,
+        }
+    }
+}
+
+impl TryFrom<&ControlMessage> for crate::capability::ActionResult {
+    type Error = crate::capability::ContractError;
+
+    fn try_from(message: &ControlMessage) -> Result<Self, Self::Error> {
+        let ControlMessage::ActionResult {
+            v,
+            id,
+            connection_epoch,
+            session_id,
+            status,
+            error_code,
+            state,
+            capability_revision,
+        } = message
+        else {
+            return Err(crate::capability::ContractError::new(
+                crate::capability::ContractErrorCode::MalformedMessage,
+                "not an action.result message",
+            ));
+        };
+        Ok(crate::capability::ActionResult {
+            v: *v,
+            message_type: crate::capability::ACTION_RESULT_MESSAGE_TYPE.into(),
+            id: id.clone(),
+            connection_epoch: connection_epoch.clone(),
+            session_id: session_id.clone(),
+            status: *status,
+            error_code: *error_code,
+            state: state.clone(),
+            capability_revision: *capability_revision,
+        })
     }
 }
 
@@ -1630,6 +1839,85 @@ mod tests {
         host.handle(&third, 1_000_002).unwrap();
         assert_eq!(host.keyframe_requests(), 2);
         assert_eq!(host.rate_limited_keyframe_requests(), 1);
+    }
+
+    #[test]
+    fn capability_messages_round_trip_over_control_frames() {
+        use crate::capability::{
+            ActionDescriptor, ActionPresentation, ActionRequest, ActionResult, ActionStatus,
+            Authorization, CapabilitySnapshot, TargetRef,
+        };
+
+        let target = TargetRef::new("w5", "niri-boot1-w5").unwrap();
+        let snapshot = CapabilitySnapshot::new(
+            "c1",
+            Some("s1".into()),
+            "g2",
+            &target,
+            12,
+            vec![ActionDescriptor {
+                id: "window.focus".into(),
+                schema_version: 1,
+                supported: true,
+                enabled: true,
+                reason: None,
+                authorization: Authorization::Granted,
+                parameters: "vista.empty.v1".into(),
+                presentation: ActionPresentation::new("Focus window"),
+                suggested_bindings: Vec::new(),
+            }],
+        )
+        .unwrap();
+
+        let envelope = Envelope::new(0, ControlMessage::from(snapshot.clone()));
+        let json = serde_json::to_value(&envelope).unwrap();
+        assert_eq!(json["type"], "capabilities.snapshot");
+        assert_eq!(json["actions"][0]["id"], "window.focus");
+        let bytes = envelope.encode().unwrap();
+        assert!(bytes.len() <= MAX_CONTROL_FRAME_BYTES + 4);
+        let decoded = Envelope::decode(&bytes).unwrap();
+        let round: CapabilitySnapshot = (&decoded.body).try_into().unwrap();
+        assert_eq!(round, snapshot);
+
+        let context = crate::capability::ActionContext {
+            connection_epoch: "c1".into(),
+            session_id: Some("s1".into()),
+            grant_epoch: "g2".into(),
+            target: target.clone(),
+            capability_revision: 12,
+            grants: crate::capability::ActionGrants::default(),
+        };
+        let request = ActionRequest::new(
+            "r17",
+            &context,
+            "window.focus",
+            1,
+            std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        let envelope = Envelope::new(1, ControlMessage::from(request.clone()));
+        let json = serde_json::to_value(&envelope).unwrap();
+        assert_eq!(json["type"], "action.invoke");
+        assert_eq!(json["action"], "window.focus");
+        let round: ActionRequest = (&envelope.body).try_into().unwrap();
+        assert_eq!(round, request);
+
+        let result = ActionResult {
+            v: 1,
+            message_type: crate::capability::ACTION_RESULT_MESSAGE_TYPE.into(),
+            id: "r17".into(),
+            connection_epoch: "c1".into(),
+            session_id: Some("s1".into()),
+            status: ActionStatus::Completed,
+            error_code: None,
+            state: Some(serde_json::json!({ "maximized": true })),
+            capability_revision: Some(13),
+        };
+        let envelope = Envelope::new(2, ControlMessage::from(result.clone()));
+        let round: ActionResult = (&envelope.body).try_into().unwrap();
+        assert_eq!(round, result);
+
+        assert!(CapabilitySnapshot::try_from(&ControlMessage::Ping { nonce: 1 }).is_err());
     }
 
     #[test]
