@@ -406,8 +406,10 @@ fn run() -> Result<(), NiriError> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!(
-                    "Encoded {} selected-window frames into {} H.264 buffers ({} bytes) in {} ms with {:?}; no pixels were saved or transmitted.",
+                    "Encoded {} selected-window frames at {}x{} into {} H.264 buffers ({} bytes) in {} ms with {:?}; no pixels were saved or transmitted.",
                     report.input_frames,
+                    report.input_width,
+                    report.input_height,
                     report.encoded_buffers,
                     report.encoded_bytes,
                     report.elapsed_ms,
