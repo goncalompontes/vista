@@ -88,12 +88,12 @@ Every target has a monotonically increasing generation. Actions include the gene
 3. Implement WebRTC signaling and a synthetic-source vertical slice **without Niri as a dependency**; build optional typed `niri-ipc` catalog/actions in parallel.
 4. Add a Linux portal capability/permission probe, verify Niri and then GNOME/KDE (plus a wlroots environment) with a published per-capability matrix.
 5. Connect real consented ScreenCast/PipeWire/H.264 capture to WebRTC and iOS using the picker-only path first; correlate catalog to portal sources only when proven.
-6. Add discovery, pairing and standard security.
-7. Add RemoteDesktop/libei input and capability-driven actions.
-8. Add clipboard and audio.
+6. Bind host identity and pairing to secure signaling/WebRTC before any real network playback; discovery can proceed alongside pairing.
+7. Add RemoteDesktop/libei input and capability-driven actions, with explicit view-only fallback.
+8. Add separately authorized clipboard and audio.
 9. Benchmark and select the independent-session compositor and session-local media/input adapters; implement supervision with explicit isolation limitations.
-10. Retire production custom media/control transport and hand-maintained wire mirrors.
-11. Run LAN/Tailscale performance, security and recovery gates before release.
+10. Retire production custom media/control transport and hand-maintained wire mirrors **only after** authenticated WebRTC and generated-schema acceptance.
+11. Run LAN/Tailscale performance, security and recovery gates before release. Evaluate X11/Xorg through #72 as a later Linux adapter, not an initial release gate.
 
 ## Engineering rules for worker agents
 
@@ -112,6 +112,6 @@ Every implementation PR links one child issue and records the acceptance evidenc
 
 ## Platform neutrality and verified support
 
-[ADR 0002](adr/0002-host-platform-neutral-core.md) is the proposed normative host-boundary decision. The [Linux compatibility and probing design](design/linux-desktop-compatibility.md) defines how partial support is discovered, advertised and tested. These documents should be reviewed and accepted before implementation of the cross-desktop adapters.
+[ADR 0002](adr/0002-host-platform-neutral-core.md) is the proposed normative host-boundary decision. The [Linux compatibility and probing design](design/linux-desktop-compatibility.md) defines how partial support is discovered, advertised and tested. The [provider interface and worker handoff specification](design/provider-interface-contracts.md) gives typed contracts, state-machine sequences, fixtures and PR-sized implementation slices. These documents should be reviewed and accepted before implementation of the cross-desktop adapters.
 
 **Worker rule:** never assume that catalog listing implies capture; that ScreenCast implies input; that a user-selected portal stream maps to a compositor window ID; or that a private headless compositor provides a session portal. Use provider-specific, grant-bound opaque handles and scoped input leases. Niri remains the first tested provider, not a core requirement.
