@@ -14,7 +14,7 @@ Do not assume installed `xdg-desktop-portal` = functioning desktop integration. 
 
 | Environment | Catalog discovery | Window selection/capture | Input injection | Semantic actions | Independent app |
 |---|---|---|---|---|---|
-| Niri Wayland | typed niri-ipc candidate | ScreenCast portal/PipeWire; verify window picker | RemoteDesktop/EIS if supported; prove scope | limited typed Niri actions | separately managed compositor |
+| Niri Wayland | direct JSON Unix-socket Niri provider (preferred subject to #73) | ScreenCast portal/PipeWire; verify window picker | RemoteDesktop/EIS if supported; prove scope | limited typed Vista Niri actions | separately managed compositor |
 | GNOME Wayland | optional native adapter or picker-only | GNOME portal backend; verify selected window | test RemoteDesktop/EIS and scope | provider-specific; none by default | same managed session runtime |
 | KDE Plasma Wayland | optional native adapter or picker-only | KDE portal backend; verify selected window | test RemoteDesktop/EIS and scope | provider-specific; none by default | same managed session runtime |
 | wlroots-based desktop (choose sway/hyprland) | optional compositor adapter or picker-only | installed portal backend; verify WINDOW capability | verify RemoteDesktop/EIS availability, not assumed | provider-specific; none by default | same managed session runtime |
