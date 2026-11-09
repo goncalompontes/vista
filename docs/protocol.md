@@ -372,19 +372,34 @@ CLI.
 same contract. A lease owns the target, action grants and input permissions;
 revocation advances the grant epoch, drops every grant and releases all held
 buttons/keys, so queued actions or input from the old grant are rejected. Re-granting
-also advances the epoch. The lease is not yet wired to the network transport.
+also advances the epoch.
+
+`host/src/control_dispatch.rs` binds that lease to an authenticated control
+session. `HostControlChannel` derives the `ActionContext` from the lease rather
+than trusting the client's request, answers `capabilities.snapshot` for the
+current grant (ungranted actions appear as `required`), and routes
+`action.invoke` to a truthful `action.result`. A request whose session id,
+connection epoch, grant epoch, target or capability revision does not match the
+lease is rejected before the backend runs; malformed wire requests produce a
+structured rejection rather than a protocol failure. `HostSession::attach_control`
+requires the channel to target the pairing-assigned session id, and
+`HostSession::control_snapshot` emits a snapshot through the normal host
+sequence. Revoke followed by re-grant leaves pre-revoke requests stale.
 
 Fixtures shared with the Swift models are in
 [`docs/fixtures/capabilities-v1.json`](fixtures/capabilities-v1.json). Rust
 tests decode and validate them, and `vista-host capability-test --json` exercises
 the rejection, availability, revision, duplicate, reconnect and cleanup paths.
+`vista-host control-dispatch-test --json` runs a real in-memory
+`HostSession`/`ClientSession` pairing, attaches a dispatcher, verifies the
+snapshot and a completed action, and confirms duplicate, revoked, stale-grant,
+wrong-session, wrong-target and malformed requests are rejected.
 
-The control envelope now defines `capabilities.snapshot`, `action.invoke` and
-`action.result` variants plus lossless conversions to and from the capability
-types, with a round-trip test. A transport does not dispatch them yet: native
-pointer/keyboard injection, menu retrieval from real applications, policy-driven
-remembered grants, client UI wiring and live Niri action verification remain
-open.
+Native pointer/keyboard injection and menu retrieval from real applications are
+still open. `protocol-serve` remains video-only: it does not yet construct an
+action policy or attach a desktop backend, so the dispatcher is proven at the
+session layer and through the diagnostic rather than through the TCP listener.
+Client UI wiring and live Niri action verification also remain open.
 
 ## Implemented, verified and pending
 
@@ -397,17 +412,25 @@ Implemented and unit-tested in `host/src/protocol.rs`:
 - `vista-host protocol-test --json` in-memory diagnostic;
 - Rust decoding of the Swift-compatible fixtures;
 - the capability/action/portable-input contract in `host/src/capability.rs`,
-  its shared fixtures and the `capability-test --json` diagnostic.
+  its shared fixtures and the `capability-test --json` diagnostic;
+- the session-bound dispatcher in `host/src/control_dispatch.rs`, including
+  `attach_control`, snapshot and action-result routing, and the
+  `control-dispatch-test --json` diagnostic.
 
 Test evidence on the development host:
 
 ```text
 cargo test --workspace
-  ... protocol tests: 12 passed
+  ... protocol tests: 15 passed
   ... CLI tests: 2 passed
 cargo run -- protocol-test --json
   protocol 1.0, Active/Active, keys match,
   wrong secret/replay/expiry/escalation/version mismatch all rejected,
+  verified: true
+cargo run -- control-dispatch-test --json
+  in-memory pairing attached to a control lease,
+  snapshot + completed action, duplicate cached,
+  revoked/stale-grant/wrong-session/wrong-target/malformed rejected,
   verified: true
 ```
 
