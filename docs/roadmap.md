@@ -1,5 +1,8 @@
 # Vista implementation plan
 
+For the ordered, dependency-aware sequence (phase gates and the next PRs), see
+[plan.md](plan.md). This document keeps the milestone checklist.
+
 ## M0 — host foundation (in progress)
 
 - [x] Initialize project structure and Rust host crate.

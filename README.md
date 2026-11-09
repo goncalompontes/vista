@@ -72,6 +72,7 @@ Window IDs come from the active Niri session and can change after a window close
 - `docs/protocol.md`: versioned host/client control protocol, pairing, threat model and transport recommendation.
 - `docs/architecture.md`: host, transport, iOS, compositing and session architecture.
 - `docs/roadmap.md`: phased implementation and acceptance milestones.
+- `docs/plan.md`: ordered delivery plan with phase gates and the next PR sequence.
 
 ## Principles
 
