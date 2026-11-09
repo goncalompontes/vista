@@ -1,9 +1,9 @@
 # Vista delivery plan
 
-Status as of **2026-11-09** (main `1e2a661`, PR #35 pending). This document
-converts the milestone checklist in [roadmap.md](roadmap.md) into an ordered,
-dependency-aware sequence. The roadmap says *what* each milestone needs; this
-plan says *what to build next, in which order, and how to prove it*.
+Status as of **2026-11-09** (main `f031600`). The ten increments below were
+implemented, merged and verified; Rust host and iOS client CI are green on
+`main`. This document converts the milestone checklist in
+[roadmap.md](roadmap.md) into an ordered, dependency-aware sequence.
 
 Related: [architecture](architecture.md), [protocol](protocol.md),
 [Sill source map](sill-reference.md), and open issues
@@ -27,17 +27,28 @@ Implemented and tested in the repository:
 - Versioned control protocol: PSK pairing, HMAC confirmation, HKDF keys, strict
   sequencing, permissions, encrypted localhost TCP control loopback, one-shot
   listener/client.
-- Capability/action/portable-input contract, control lease, and (PR #35) a
-  session-bound dispatcher that derives authorization from the lease and routes
+- Capability/action/portable-input contract, control lease, and a session-bound
+  dispatcher that derives authorization from the lease and routes
   `action.invoke` to truthful results.
-- iOS/iPadOS SwiftUI shell + `VistaCore` models (preview data only); Android
-  Skip APK preview.
+- Opt-in action policy on the one-shot `protocol-serve` listener with a
+  two-process action probe.
+- Window lifecycle guard for removal, portal close, revocation, compositor
+  restart and resize, with an opt-in Niri watcher.
+- Bounded persistent capture at native geometry with latency percentiles and
+  keyframe-on-demand, verified on real Niri/NVENC hardware.
+- Reusable H.264 media-record codec with PTS/keyframe/discontinuity and a
+  bounded drop-discontinuity queue (ADR 0001).
+- iOS/iPadOS Swift control transport, pairing crypto, Keychain-backed pairing
+  sheet, live window catalog and VideoToolbox stream view with a synthetic
+  self-test; Android Skip APK preview.
 
 Not yet demonstrated anywhere:
 
-- A portal-approved real window producing live H.264 for more than a diagnostic
-  burst.
 - An action or input event reaching a real desktop through the transport.
+- A real host-to-client media connection (the media codec is exercised only by
+  the two-process synthetic diagnostic; the client stream view has no live feed).
+- Indefinite streaming, interactive revocation, congestion control, discovery,
+  or isolated application sessions.
 - Any client-side network connection, pairing, decode or input.
 - Independent application sessions.
 
@@ -135,18 +146,30 @@ client cannot see or affect the host desktop.
 - **E3 Packaging:** Arch `PKGBUILD`, systemd user service, reproducible setup.
 - **E4 Assurance:** network stress, privacy review, dependency and threat review.
 
-## Next PRs (ordered)
+## Executed increments (2026-11-09)
 
-1. `feat(host): attach action policy to protocol-serve` — B1. Direct follow-up to
-   #35; proves the dispatcher over the real encrypted listener.
-2. `feat(host): live window lifecycle guard` — A3. Niri/portal close, resize,
-   revoke with unit tests.
-3. `feat(host): persistent capture pipeline with latency report` — A2/A4.
-4. `docs(host): record approved per-window capture verification` — A1 evidence.
-5. `feat(client): control transport and pairing` — C1.
-6. `feat(client): live catalog and capability snapshot` — C2.
-7. `feat(client): VideoToolbox stream view` — C3.
-8. `ci: build and test Rust host` — E1 (small, unblocks every later PR).
+| Increment | PR | State |
+|---|---|---|
+| Action policy on the control listener | #47 | merged |
+| Live window lifecycle guard | #48 | merged |
+| Persistent capture + latency/keyframes | #50 | merged; real-hardware run recorded |
+| Capture verification evidence | #55 | merged |
+| Production media record transport + ADR | #51 | merged (codec/queue; real connection pending) |
+| Swift control transport + pairing | #52 | merged; iOS CI green |
+| Live catalog + capability snapshot UI data | #53 | merged; iOS CI green |
+| VideoToolbox decode + stream view | #54 | merged; iOS CI green |
+| Rust host CI | #49 | merged and green on `main` |
+
+### Next steps
+
+1. Wire the real host media path into the client stream view (the current
+   `media_transport` is exercised by the synthetic two-process diagnostic only).
+2. Connect the capability snapshot/actions to the client UI and native input
+   injection; #37/#47 currently prove this over the listener with a deterministic
+   backend.
+3. Add incremental catalog refresh and reconnect handling.
+4. Continue M3 input/keyboard/audio/clipboard, then M4 independent sessions and
+   M5 packaging/reliability.
 
 Parallel, low-risk: Android capability-controls screen (#34), launcher icon, and
 Sill parity review.
