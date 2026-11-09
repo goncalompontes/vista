@@ -81,6 +81,16 @@ Set `VPHONE_HOME` to point at a different vphone-linux checkout, and
 `VPHONE_CID` if the guest uses a vsock CID other than 3. The helper uses
 vphone-linux's own IPA installer and vphoned diagnostic tooling.
 
+**Current setup status (2026-11-09):** Swift 6.4.1, `xtool 1.24.0` and the
+**Xcode 27.2 Darwin SDK** are installed (`xtool sdk status` reports the SDK at
+`~/.swiftpm/swift-sdks/darwin.artifactbundle`). `xtool dev build --ipa`
+produced `client/ios/xtool/Vista.ipa` (about 1.1 MB). The
+`.github/workflows/ios.yml` workflow is committed and its two `ios-simulator`
+jobs passed on macOS. The vphone iPhone 16 Pro iOS 26.6.2 VM is being created:
+the GPU driver was extracted and the firmware prepared/patched; the main
+restore/CFW/first-boot stages are still running. Installing and launching the
+IPA in the guest is the next validation step.
+
 **Current setup status (2026-11-07):** `xtool 1.24.0` was installed
 as a SHA-256-verified AppImage, extracted under
 `~/.local/opt/xtool-1.24.0/squashfs-root/` and exposed at
@@ -148,8 +158,9 @@ advertise `VK_EXT_external_memory_host`; actual reims-vgpu rendering and
 iOS guest boot remain unverified. The host has about 334 GiB free on /home,
 16 GiB free in /dev/shm, and 31 GiB RAM. `rcodesign` (`apple-codesign 0.29.0`)
 was installed to `~/.local/bin/rcodesign` and independently verified.
-`xtool sdk status` still reports **Not installed**; an authorized compatible
-Xcode archive is required for native IPA compilation.
+At the time of that 2026-11-07 check, `xtool sdk status` reported **Not installed**;
+the 2026-11-09 update above supersedes that: the Xcode 27.2 SDK is installed
+and the IPA builds.
 
 The real `setup/create-vm.sh` path remains **unrun**. Its restore stages need
 additional host utilities (`socat`, `rsync`, `sshfs`, `bc` were not found),
@@ -182,9 +193,10 @@ iPhone/iPad, sign into an Apple Account in Xcode and configure your own
 development team and bundle identifier if needed. Free personal teams support
 temporary on-device provisioning with restrictions.
 
-A local, unpublished `.github/workflows/ios.yml` workflow draft builds the iOS Simulator target on a
-macOS runner without device signing and runs `VistaCore` tests. Publishing it is blocked until the GitHub OAuth token has `workflow` scope. The generated
-`Vista.xcodeproj` is ignored; regenerate it from `project.yml`.
+The `.github/workflows/ios.yml` workflow builds the iOS Simulator target on a
+macOS runner without device signing and runs `VistaCore` tests. Both
+`ios-simulator` jobs passed on PR #31. The generated `Vista.xcodeproj` is
+ignored; regenerate it from `project.yml`.
 
 ## Next integration milestones
 
