@@ -13,6 +13,7 @@ pub mod keyframe_control;
 pub mod live;
 pub mod media;
 pub mod media_stream;
+pub mod media_transport;
 pub mod output_capture;
 pub mod pipewire_loopback;
 pub mod portal;

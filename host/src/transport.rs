@@ -102,6 +102,7 @@ pub struct RecordCipher {
     key: LessSafeKey,
     aad: Vec<u8>,
     counter: u64,
+    max_plaintext: usize,
 }
 
 impl RecordCipher {
@@ -109,6 +110,17 @@ impl RecordCipher {
         key: &[u8; 32],
         session_id: &str,
         direction: Direction,
+    ) -> Result<Self, TransportError> {
+        Self::with_limit(key, session_id, direction, MAX_CONTROL_FRAME_BYTES)
+    }
+
+    /// Record cipher with an explicit plaintext bound. The control channel keeps
+    /// the 64 KiB frame cap; media uses a larger bound for one H.264 access unit.
+    pub fn with_limit(
+        key: &[u8; 32],
+        session_id: &str,
+        direction: Direction,
+        max_plaintext: usize,
     ) -> Result<Self, TransportError> {
         let unbound =
             UnboundKey::new(&CHACHA20_POLY1305, key).map_err(|_| TransportError::Crypto)?;
@@ -119,6 +131,7 @@ impl RecordCipher {
             key: LessSafeKey::new(unbound),
             aad,
             counter: 0,
+            max_plaintext,
         })
     }
 
@@ -129,7 +142,7 @@ impl RecordCipher {
     }
 
     pub fn seal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, TransportError> {
-        if plaintext.len() > MAX_CONTROL_FRAME_BYTES {
+        if plaintext.len() > self.max_plaintext {
             return Err(TransportError::RecordTooLarge);
         }
         let nonce = self.nonce()?;
@@ -145,7 +158,9 @@ impl RecordCipher {
     }
 
     pub fn open(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, TransportError> {
-        if ciphertext.len() < RECORD_TAG_BYTES || ciphertext.len() > MAX_RECORD_BYTES {
+        if ciphertext.len() < RECORD_TAG_BYTES
+            || ciphertext.len() > self.max_plaintext.saturating_add(RECORD_TAG_BYTES)
+        {
             return Err(TransportError::RecordTooLarge);
         }
         let nonce = self.nonce()?;
