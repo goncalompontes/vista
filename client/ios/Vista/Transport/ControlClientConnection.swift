@@ -18,6 +18,7 @@ public enum ControlClientEvent: Equatable {
     case sessionOpened(PermissionSet)
     case pong(UInt64)
     case rejected(String)
+    case catalog(CatalogSnapshot)
     case message(String)
 }
 
@@ -40,6 +41,7 @@ public final class ControlClientConnection: @unchecked Sendable {
     public private(set) var hostName: String?
     public private(set) var pairingID: String?
     public private(set) var policy: PermissionSet?
+    public private(set) var catalog: CatalogSnapshot?
     public var onEvent: ((ControlClientEvent) -> Void)?
 
     public init() {}
@@ -217,6 +219,10 @@ public final class ControlClientConnection: @unchecked Sendable {
         case let .pong(nonce):
             try client.acceptPong(envelope, nonce: lastPingNonce ?? nonce)
             onEvent?(.pong(nonce))
+        case .catalogSnapshot:
+            let accepted = try client.acceptCatalogSnapshot(envelope)
+            catalog = accepted
+            onEvent?(.catalog(accepted))
         default:
             onEvent?(.message(envelope.body.typeName))
         }

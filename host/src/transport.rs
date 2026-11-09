@@ -14,6 +14,9 @@ use crate::capability::{
     ActionBackend, ActionGrants, ActionRegistry, ActionRequest, ActionStatus, InputPermissions,
     TargetRef,
 };
+use crate::catalog_wire::{
+    CATALOG_CONTRACT_VERSION, CATALOG_MESSAGE_TYPE, CatalogEntry, CatalogSnapshot,
+};
 use crate::control_dispatch::HostControlChannel;
 use crate::control_lease::ControlLease;
 use crate::protocol::{
@@ -273,6 +276,8 @@ pub struct ServerStats {
     pub control_snapshot_sent: bool,
     pub action_results: usize,
     pub actions_completed: usize,
+    pub catalog_sent: bool,
+    pub catalog_entries: usize,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -282,6 +287,7 @@ pub struct ClientStats {
     pub encrypted_reads: usize,
     pub pong_verified: bool,
     pub reached_active: bool,
+    pub catalog_entries: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -316,6 +322,54 @@ impl ControlSetup {
             input_permissions,
             capability_revision,
             backend,
+        }
+    }
+}
+
+/// Catalog metadata captured before pairing. The session-dependent epoch and
+/// session id are filled in once the host enters `SessionOpened`.
+#[derive(Clone, Debug)]
+pub struct CatalogSetup {
+    pub entries: Vec<CatalogEntry>,
+    pub generation: String,
+    pub revision: u64,
+}
+
+impl CatalogSetup {
+    pub fn new(
+        entries: Vec<CatalogEntry>,
+        generation: impl Into<String>,
+        revision: u64,
+    ) -> Result<Self, TransportError> {
+        let setup = Self {
+            entries,
+            generation: generation.into(),
+            revision,
+        };
+        let probe = CatalogSnapshot {
+            v: CATALOG_CONTRACT_VERSION,
+            message_type: CATALOG_MESSAGE_TYPE.into(),
+            connection_epoch: "bind".into(),
+            session_id: None,
+            generation: setup.generation.clone(),
+            revision: setup.revision,
+            entries: setup.entries.clone(),
+        };
+        probe
+            .validate()
+            .map_err(|detail| TransportError::Server(format!("catalog setup: {detail}")))?;
+        Ok(setup)
+    }
+
+    fn bind_session(&self, session_id: &str) -> CatalogSnapshot {
+        CatalogSnapshot {
+            v: CATALOG_CONTRACT_VERSION,
+            message_type: CATALOG_MESSAGE_TYPE.into(),
+            connection_epoch: session_id.to_string(),
+            session_id: Some(session_id.to_string()),
+            generation: self.generation.clone(),
+            revision: self.revision,
+            entries: self.entries.clone(),
         }
     }
 }
@@ -367,6 +421,7 @@ pub struct HostControlServer {
     host: HostSession,
     now_secs: u64,
     control: Option<ControlSetup>,
+    catalog: Option<CatalogSetup>,
 }
 
 impl HostControlServer {
@@ -375,7 +430,14 @@ impl HostControlServer {
         secret: PairingSecret,
         now_secs: u64,
     ) -> Result<(Self, ServerOffer), TransportError> {
-        Self::bind_with_control(address, secret, now_secs, PermissionSet::video_only(), None)
+        Self::bind_full(
+            address,
+            secret,
+            now_secs,
+            PermissionSet::video_only(),
+            None,
+            None,
+        )
     }
 
     /// Bind a listener with an explicit session permission policy and optional
@@ -388,6 +450,41 @@ impl HostControlServer {
         now_secs: u64,
         policy: PermissionSet,
         control: Option<ControlSetup>,
+    ) -> Result<(Self, ServerOffer), TransportError> {
+        Self::bind_full(address, secret, now_secs, policy, control, None)
+    }
+
+    /// Bind with an explicit permission policy and optional initial catalog
+    /// snapshot. The catalog is sent once the authenticated session is active.
+    pub fn bind_with_catalog(
+        address: SocketAddr,
+        secret: PairingSecret,
+        now_secs: u64,
+        policy: PermissionSet,
+        catalog: Option<CatalogSetup>,
+    ) -> Result<(Self, ServerOffer), TransportError> {
+        Self::bind_full(address, secret, now_secs, policy, None, catalog)
+    }
+
+    /// Bind with both an action policy and an initial catalog snapshot.
+    pub fn bind_with_control_and_catalog(
+        address: SocketAddr,
+        secret: PairingSecret,
+        now_secs: u64,
+        policy: PermissionSet,
+        control: Option<ControlSetup>,
+        catalog: Option<CatalogSetup>,
+    ) -> Result<(Self, ServerOffer), TransportError> {
+        Self::bind_full(address, secret, now_secs, policy, control, catalog)
+    }
+
+    fn bind_full(
+        address: SocketAddr,
+        secret: PairingSecret,
+        now_secs: u64,
+        policy: PermissionSet,
+        control: Option<ControlSetup>,
+        catalog: Option<CatalogSetup>,
     ) -> Result<(Self, ServerOffer), TransportError> {
         if let Some(setup) = &control
             && (setup.capability_revision == 0)
@@ -410,6 +507,7 @@ impl HostControlServer {
                 host,
                 now_secs,
                 control,
+                catalog,
             },
             offer,
         ))
@@ -430,7 +528,14 @@ impl HostControlServer {
             match self.listener.accept() {
                 Ok((stream, _)) => {
                     stream.set_nonblocking(false)?;
-                    return serve(stream, self.host, self.now_secs, self.control, &mut hook);
+                    return serve(
+                        stream,
+                        self.host,
+                        self.now_secs,
+                        self.control,
+                        self.catalog,
+                        &mut hook,
+                    );
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
@@ -449,6 +554,7 @@ fn serve<F>(
     mut host: HostSession,
     now_secs: u64,
     control: Option<ControlSetup>,
+    catalog: Option<CatalogSetup>,
     hook: &mut F,
 ) -> Result<ServerStats, TransportError>
 where
@@ -510,6 +616,18 @@ where
             connection.write_envelope(&snapshot)?;
             stats.control_snapshot_sent = true;
         }
+    }
+
+    if let Some(catalog) = catalog {
+        let session_id = host
+            .session_id()
+            .ok_or(TransportError::PairingState)?
+            .to_string();
+        let snapshot = catalog.bind_session(&session_id);
+        stats.catalog_entries = snapshot.entries.len();
+        let envelope = host.emit_catalog(snapshot)?;
+        connection.write_envelope(&envelope)?;
+        stats.catalog_sent = true;
     }
 
     for _ in 0..MAX_ACTIVE_RECORDS {
@@ -626,9 +744,31 @@ pub fn connect(address: SocketAddr, secret: PairingSecret) -> Result<ClientStats
     stats.encrypted_writes += 1;
     connection.write_envelope(&client.ping(42)?)?;
     stats.encrypted_writes += 1;
-    let pong = connection.read_envelope()?;
-    stats.encrypted_reads += 1;
-    client.accept_pong(&pong, 42)?;
+    let mut pong_verified = false;
+    for _ in 0..4 {
+        let envelope = connection.read_envelope()?;
+        stats.encrypted_reads += 1;
+        match &envelope.body {
+            ControlMessage::CatalogSnapshot { .. } => {
+                let snapshot = client.accept_catalog_snapshot(&envelope)?;
+                stats.catalog_entries = snapshot.entries.len();
+            }
+            ControlMessage::Pong { .. } => {
+                client.accept_pong(&envelope, 42)?;
+                pong_verified = true;
+                break;
+            }
+            other => {
+                return Err(TransportError::Protocol(ProtocolError::InvalidTransition {
+                    expected: "catalog.snapshot or pong",
+                    actual: other.name(),
+                }));
+            }
+        }
+    }
+    if !pong_verified {
+        return Err(TransportError::Timeout);
+    }
     stats.pong_verified = true;
 
     connection.write_envelope(&client.session_close("loopback complete")?)?;
@@ -664,9 +804,27 @@ pub fn connect_control(
         encrypted_reads: stats.encrypted_reads,
     };
 
-    let snapshot_envelope = connection.read_envelope()?;
-    control.encrypted_reads += 1;
-    let snapshot = client.accept_capability_snapshot(&snapshot_envelope)?;
+    let mut snapshot = None;
+    for _ in 0..4 {
+        let envelope = connection.read_envelope()?;
+        control.encrypted_reads += 1;
+        match &envelope.body {
+            ControlMessage::CatalogSnapshot { .. } => {
+                client.accept_catalog_snapshot(&envelope)?;
+            }
+            ControlMessage::CapabilitySnapshot { .. } => {
+                snapshot = Some(client.accept_capability_snapshot(&envelope)?);
+                break;
+            }
+            other => {
+                return Err(TransportError::Protocol(ProtocolError::InvalidTransition {
+                    expected: "capabilities.snapshot or catalog.snapshot",
+                    actual: other.name(),
+                }));
+            }
+        }
+    }
+    let snapshot = snapshot.ok_or(TransportError::Timeout)?;
     control.snapshot_received = true;
     control.snapshot_actions = snapshot.actions.len();
     control.grant_epoch = snapshot.grant_epoch.clone();
@@ -689,9 +847,27 @@ pub fn connect_control(
     .map_err(|error| TransportError::Control(error.to_string()))?;
     connection.write_envelope(&client.action_invoke(&request)?)?;
     control.encrypted_writes += 1;
-    let reply = connection.read_envelope()?;
-    control.encrypted_reads += 1;
-    let result = client.accept_action_result(&reply)?;
+    let mut result = None;
+    for _ in 0..4 {
+        let reply = connection.read_envelope()?;
+        control.encrypted_reads += 1;
+        match &reply.body {
+            ControlMessage::CatalogSnapshot { .. } => {
+                client.accept_catalog_snapshot(&reply)?;
+            }
+            ControlMessage::ActionResult { .. } => {
+                result = Some(client.accept_action_result(&reply)?);
+                break;
+            }
+            other => {
+                return Err(TransportError::Protocol(ProtocolError::InvalidTransition {
+                    expected: "action.result or catalog.snapshot",
+                    actual: other.name(),
+                }));
+            }
+        }
+    }
+    let result = result.ok_or(TransportError::Timeout)?;
     control.action_result_received = true;
     control.action_status = Some(result.status);
     control.action_error = result.error_code;

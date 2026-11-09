@@ -338,6 +338,27 @@ permission escalation. The iOS target adds a Network.framework connection and a
 Keychain-backed pairing sheet; it stops at an opened control session (no catalog,
 video or input yet).
 
+## Window catalog
+
+`catalog.snapshot` carries host-owned window metadata over the authenticated
+session; it is never a capability grant and never contains pixels, PIDs,
+arguments or paths.
+
+- Fields: `v`, `connection_epoch`, optional `session_id`, `generation`,
+  `revision` (non-zero) and `entries`.
+- An entry carries `window_id`, optional `title`, `app_id` and `workspace_id`.
+- Limits: 256 entries, 256-byte titles, 128-byte app IDs, unique window IDs.
+- `connection_epoch` and `session_id` must equal the authenticated session, so a
+  spliced snapshot cannot cross sessions.
+- `HostSession::emit_catalog` sends it through the normal host sequence.
+- `protocol-serve --catalog` snapshots Niri's current window list once after
+  `SessionOpened`; refresh currently means reconnecting. Live incremental
+  catalog updates are future work.
+
+Swift decodes the same fixture into `CatalogSnapshot`/`CatalogEntry`, validates
+the bounds and maps entries to portable application rows. The iOS library shows
+a `LIVE` badge and an honest empty state; unavailable actions remain disabled.
+
 ## Capabilities, actions and portable input
 
 `host/src/capability.rs` implements the first transport-independent part of the

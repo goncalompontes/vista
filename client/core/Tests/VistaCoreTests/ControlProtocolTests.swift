@@ -40,9 +40,25 @@ final class ControlProtocolTests: XCTestCase {
             let framed = try ControlFraming.encode(envelope)
             XCTAssertEqual(try ControlFraming.decode(framed), envelope)
         }
+
+        guard case let .catalogSnapshot(catalog) = fixtures.hostFrames.last?.body else {
+            return XCTFail("last host frame is not catalog.snapshot")
+        }
+        XCTAssertEqual(catalog.entries.count, 2)
+        XCTAssertEqual(catalog.entries[0].displayName, "Browser")
+        XCTAssertEqual(catalog.revision, 1)
     }
 
     func testEveryMessageRoundTrips() throws {
+        let catalog = try CatalogSnapshot(
+            connectionEpoch: "s1",
+            sessionID: "s1",
+            generation: "niri-test",
+            revision: 1,
+            entries: [
+                CatalogEntry(windowID: 5, title: "Browser", appID: "firefox", workspaceID: 2)
+            ]
+        )
         let messages: [ControlMessage] = [
             .clientHello(versions: .current, clientID: "iphone", clientNonce: String(repeating: "00", count: 32)),
             .serverHello(
@@ -64,7 +80,8 @@ final class ControlProtocolTests: XCTestCase {
             .pong(nonce: 42),
             .sessionClose(sessionID: String(repeating: "55", count: 16), reason: "done"),
             .sessionClose(sessionID: nil, reason: "anonymous close"),
-            .error(code: "denied", message: "no")
+            .error(code: "denied", message: "no"),
+            .catalogSnapshot(catalog)
         ]
         for (index, message) in messages.enumerated() {
             let envelope = Envelope(seq: UInt64(index), body: message)

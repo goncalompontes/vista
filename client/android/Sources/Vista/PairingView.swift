@@ -6,6 +6,7 @@ import SwiftUI
 /// control handshake and stops there: catalog and video arrive in later
 /// increments, so success means "paired session opened", never "streaming".
 struct PairingView: View {
+    @ObservedObject var store: LiveCatalogStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var host = ""
@@ -119,6 +120,10 @@ struct PairingView: View {
                 case let .serverHello(hostName, pairingID, _):
                     connectedHost = hostName
                     connectedPairingID = pairingID
+                    store.setHost(hostName)
+                case let .catalog(snapshot):
+                    store.apply(snapshot, hostName: connectedHost)
+                    status = "Paired. Received \(snapshot.entries.count) window(s)."
                 case let .sessionOpened(permissions):
                     isConnecting = false
                     status = "Paired. Video=\(permissions.video) input=\(permissions.input)."

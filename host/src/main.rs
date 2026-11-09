@@ -38,7 +38,7 @@ fn usage() {
     eprintln!("       vista-host protocol-test [--json]");
     eprintln!("       vista-host protocol-loopback [--json]");
     eprintln!(
-        "       vista-host protocol-serve --confirm [--listen ADDR] [--secret-hex HEX] [--window ID --allow-window-actions|--allow-desktop-actions|--allow-clipboard|--allow-input] [--fake-actions] [--capability-revision N] [--allow-remote] [--json]"
+        "       vista-host protocol-serve --confirm [--listen ADDR] [--secret-hex HEX] [--window ID --allow-window-actions|--allow-desktop-actions|--allow-clipboard|--allow-input] [--fake-actions] [--capability-revision N] [--catalog] [--allow-remote] [--json]"
     );
     eprintln!("       vista-host keyframe-control-test [--json]");
     eprintln!("       vista-host media-stream --serve [--listen ADDR] [--frames N] [--json]");
@@ -837,6 +837,7 @@ fn protocol_serve(args: &[&str], json: bool, niri: &Niri) -> Result<(), NiriErro
             "--allow-clipboard",
             "--allow-input",
             "--fake-actions",
+            "--catalog",
         ],
     )?;
     if !args.contains(&"--confirm") {
@@ -953,12 +954,33 @@ fn protocol_serve(args: &[&str], json: bool, niri: &Niri) -> Result<(), NiriErro
             NiriError::Unavailable(format!("cannot generate pairing secret: {error}"))
         })?,
     };
-    let (server, offer) = vista_host::transport::HostControlServer::bind_with_control(
+    let catalog = if args.contains(&"--catalog") {
+        let windows = niri.windows()?;
+        let entries = windows
+            .iter()
+            .map(vista_host::catalog_wire::CatalogEntry::from_window)
+            .collect();
+        Some(
+            vista_host::transport::CatalogSetup::new(
+                entries,
+                vista_host::catalog_wire::CatalogSnapshot::current_generation(),
+                1,
+            )
+            .map_err(|error| {
+                NiriError::Unavailable(format!("cannot build catalog snapshot: {error}"))
+            })?,
+        )
+    } else {
+        None
+    };
+    let catalog_entries = catalog.as_ref().map_or(0, |setup| setup.entries.len());
+    let (server, offer) = vista_host::transport::HostControlServer::bind_with_control_and_catalog(
         address,
         secret.clone(),
         protocol::unix_now(),
         policy,
         control,
+        catalog,
     )
     .map_err(|error| NiriError::Unavailable(format!("cannot bind control listener: {error}")))?;
     let invite = serde_json::json!({
@@ -968,6 +990,7 @@ fn protocol_serve(args: &[&str], json: bool, niri: &Niri) -> Result<(), NiriErro
         "secret_hex": secret.to_hex(),
         "expires_at": offer.expires_at,
         "control": control_info,
+        "catalog_entries": catalog_entries,
     });
     if json {
         println!("{}", serde_json::to_string(&invite)?);
@@ -994,6 +1017,9 @@ fn protocol_serve(args: &[&str], json: bool, niri: &Niri) -> Result<(), NiriErro
         } else {
             println!("No action policy attached: this listener is video-only.");
         }
+        if catalog_entries > 0 {
+            println!("Catalog snapshot enabled with {catalog_entries} window(s).");
+        }
         io::stdout().flush()?;
     }
     let stats = server
@@ -1003,14 +1029,16 @@ fn protocol_serve(args: &[&str], json: bool, niri: &Niri) -> Result<(), NiriErro
         println!("{}", serde_json::to_string(&stats)?);
     } else {
         println!(
-            "Encrypted control session: {} handshake frames, {} encrypted records, {} keyframe request(s), pong sent={}, snapshot sent={}, {} action result(s) ({} completed).",
+            "Encrypted control session: {} handshake frames, {} encrypted records, {} keyframe request(s), pong sent={}, snapshot sent={}, {} action result(s) ({} completed), catalog sent={} ({} entries).",
             stats.handshake_frames,
             stats.encrypted_records,
             stats.keyframe_requests,
             stats.pong_sent,
             stats.control_snapshot_sent,
             stats.action_results,
-            stats.actions_completed
+            stats.actions_completed,
+            stats.catalog_sent,
+            stats.catalog_entries
         );
     }
     Ok(())
@@ -1085,10 +1113,11 @@ fn protocol_client(args: &[&str], json: bool) -> Result<(), NiriError> {
         );
     } else {
         println!(
-            "Control client connected to {}: active={}, pong verified={}, {} handshake frames, {} encrypted writes / {} reads.",
+            "Control client connected to {}: active={}, pong verified={}, catalog entries={}, {} handshake frames, {} encrypted writes / {} reads.",
             address,
             stats.reached_active,
             stats.pong_verified,
+            stats.catalog_entries,
             stats.handshake_frames,
             stats.encrypted_writes,
             stats.encrypted_reads
