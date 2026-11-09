@@ -83,8 +83,8 @@
         "state": "PERMISSION_REVOKED",
         "epoch": 2
       },
-      "hex": "20042802",
-      "notes": "Wire-only fixture missing grant identity, scope and permission kind; semantic validation must reject it"
+      "hex": "20062802",
+      "notes": "Wire-only fixture missing grant identity, scope and permission kind; semantic validation must reject it; PERMISSION_REVOKED numeric value is 6"
     },
     {
       "id": "v1-unknown-optional-field",
