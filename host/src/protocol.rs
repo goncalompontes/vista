@@ -23,6 +23,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use zeroize::Zeroize;
 
+use crate::control_dispatch::HostControlChannel;
+
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 1, minor: 0 };
 pub const MAX_CONTROL_FRAME_BYTES: usize = 64 * 1024;
 pub const PAIRING_OFFER_TTL_SECS: u64 = 120;
@@ -747,6 +749,7 @@ pub struct HostSession {
     keyframe_requests: u64,
     last_keyframe_at: Option<u64>,
     rate_limited_keyframe_requests: u64,
+    control: Option<HostControlChannel>,
 }
 
 impl HostSession {
@@ -782,6 +785,7 @@ impl HostSession {
             keyframe_requests: 0,
             last_keyframe_at: None,
             rate_limited_keyframe_requests: 0,
+            control: None,
         })
     }
 
@@ -815,6 +819,49 @@ impl HostSession {
 
     pub fn rate_limited_keyframe_requests(&self) -> u64 {
         self.rate_limited_keyframe_requests
+    }
+
+    /// Attach the session-bound capability/action dispatcher. The channel must
+    /// target the authenticated session: its connection epoch and session id are
+    /// both the pairing-assigned session id, so a message cannot cross sessions.
+    /// Attaching after `SessionOpened` keeps the grant explicit and revocable.
+    pub fn attach_control(&mut self, channel: HostControlChannel) -> Result<(), ProtocolError> {
+        if self.state != HostState::Active {
+            return Err(ProtocolError::InvalidTransition {
+                expected: "an active session",
+                actual: "another state",
+            });
+        }
+        let session_id = self
+            .session_id
+            .as_deref()
+            .ok_or(ProtocolError::SessionMismatch)?;
+        if channel.session_id() != Some(session_id) || channel.connection_epoch() != session_id {
+            return Err(ProtocolError::SessionMismatch);
+        }
+        self.control = Some(channel);
+        Ok(())
+    }
+
+    /// Capability snapshot bound to the current lease grant. Returns `None` when
+    /// no dispatcher is attached. The caller sends the envelope; the sequence
+    /// number stays consistent with every other host message.
+    pub fn control_snapshot(&mut self) -> Result<Option<Envelope>, ProtocolError> {
+        let Some(control) = self.control.as_mut() else {
+            return Ok(None);
+        };
+        let message = control
+            .snapshot_message()
+            .map_err(|_| ProtocolError::PermissionDenied)?;
+        Ok(Some(self.reply(message)))
+    }
+
+    pub fn control(&self) -> Option<&HostControlChannel> {
+        self.control.as_ref()
+    }
+
+    pub fn control_mut(&mut self) -> Option<&mut HostControlChannel> {
+        self.control.as_mut()
     }
 
     fn reply(&mut self, body: ControlMessage) -> Envelope {
@@ -963,6 +1010,16 @@ impl HostSession {
                 self.last_keyframe_at = Some(now_secs);
                 self.keyframe_requests = self.keyframe_requests.saturating_add(1);
                 Ok(None)
+            }
+            (HostState::Active, ControlMessage::ActionInvoke { .. }) => {
+                let Some(control) = self.control.as_mut() else {
+                    return Err(ProtocolError::InvalidTransition {
+                        expected: "a capability-enabled session",
+                        actual: "action.invoke",
+                    });
+                };
+                let reply = control.handle(&envelope.body, now_secs);
+                Ok(reply.map(|body| self.reply(body)))
             }
             (HostState::Active, ControlMessage::Ping { nonce }) => {
                 Ok(Some(self.reply(ControlMessage::Pong { nonce: *nonce })))
@@ -1280,6 +1337,52 @@ impl ClientSession {
         let envelope = Envelope::new(self.next_client_seq, ControlMessage::Ping { nonce });
         self.next_client_seq = self.next_client_seq.wrapping_add(1);
         Ok(envelope)
+    }
+
+    /// Send one semantic action request over the authenticated session.
+    /// The host revalidates the request against its own lease; a client-supplied
+    /// context is never treated as authorization.
+    pub fn action_invoke(
+        &mut self,
+        request: &crate::capability::ActionRequest,
+    ) -> Result<Envelope, ProtocolError> {
+        if self.state != ClientState::Active {
+            return Err(ProtocolError::InvalidTransition {
+                expected: "an active session",
+                actual: "another state",
+            });
+        }
+        let envelope = Envelope::new(self.next_client_seq, ControlMessage::from(request.clone()));
+        self.next_client_seq = self.next_client_seq.wrapping_add(1);
+        Ok(envelope)
+    }
+
+    /// Consume one host `action.result` and advance the host sequence.
+    pub fn accept_action_result(
+        &mut self,
+        envelope: &Envelope,
+    ) -> Result<crate::capability::ActionResult, ProtocolError> {
+        self.check_host_sequence(envelope)?;
+        crate::capability::ActionResult::try_from(&envelope.body).map_err(|_| {
+            ProtocolError::InvalidTransition {
+                expected: "action.result",
+                actual: envelope.body.name(),
+            }
+        })
+    }
+
+    /// Consume one host `capabilities.snapshot` and advance the host sequence.
+    pub fn accept_capability_snapshot(
+        &mut self,
+        envelope: &Envelope,
+    ) -> Result<crate::capability::CapabilitySnapshot, ProtocolError> {
+        self.check_host_sequence(envelope)?;
+        crate::capability::CapabilitySnapshot::try_from(&envelope.body).map_err(|_| {
+            ProtocolError::InvalidTransition {
+                expected: "capabilities.snapshot",
+                actual: envelope.body.name(),
+            }
+        })
     }
 
     pub fn accept_pong(&mut self, envelope: &Envelope, nonce: u64) -> Result<(), ProtocolError> {
@@ -1974,13 +2077,9 @@ mod tests {
             hex::encode(host_tag(&secret, &transcript, &vector.session_id)),
             vector.host_tag
         );
-        let keys = SessionKeys::derive(
-            &secret,
-            &vector.pairing_id,
-            &transcript,
-            &vector.session_id,
-        )
-        .unwrap();
+        let keys =
+            SessionKeys::derive(&secret, &vector.pairing_id, &transcript, &vector.session_id)
+                .unwrap();
         assert_eq!(hex::encode(keys.client_to_host()), vector.client_to_host);
         assert_eq!(hex::encode(keys.host_to_client()), vector.host_to_client);
     }
@@ -1998,5 +2097,140 @@ mod tests {
         assert_eq!(report.protocol, PROTOCOL_VERSION.to_string());
         assert!(report.permissions.video);
         assert!(!report.permissions.input);
+    }
+
+    // --- capability/action dispatch through the authenticated session ---------
+
+    use crate::capability::{
+        ActionContext, ActionGrants, ActionRegistry, InputPermissions, TargetRef,
+    };
+    use crate::control_dispatch::HostControlChannel;
+
+    fn active_with_input() -> (HostSession, ClientSession) {
+        let secret = PairingSecret::from_bytes([9u8; SECRET_BYTES]);
+        let now = 1_000_000;
+        let policy = PermissionSet {
+            video: true,
+            input: true,
+            ..PermissionSet::default()
+        };
+        let mut host =
+            HostSession::new("test-host", "Test host", secret.clone(), policy, now).unwrap();
+        let mut client = ClientSession::new(secret, "test-client").unwrap();
+        let hello = client.hello().unwrap();
+        let challenge = host.handle(&hello, now).unwrap().unwrap();
+        let proof = client.accept_server_hello(&challenge).unwrap();
+        let accepted = host.handle(&proof, now).unwrap().unwrap();
+        client.accept_pairing(&accepted).unwrap();
+        let open = client.open_session(policy).unwrap();
+        let opened = host.handle(&open, now).unwrap().unwrap();
+        client.accept_session_opened(&opened).unwrap();
+        (host, client)
+    }
+
+    fn channel_for(session_id: &str, revision: u64) -> HostControlChannel {
+        let lease = crate::control_lease::ControlLease::grant(
+            session_id,
+            Some(session_id.to_string()),
+            TargetRef::new("w5", "niri-test-w5").unwrap(),
+            ActionGrants {
+                desktop_actions: false,
+                window_actions: true,
+                clipboard: false,
+            },
+            InputPermissions::default(),
+        )
+        .unwrap();
+        HostControlChannel::new(
+            ActionRegistry::new(Box::new(crate::capability::FakeActionBackend::default())
+                as Box<dyn crate::capability::ActionBackend + Send>),
+            lease,
+            revision,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn attach_control_requires_the_authenticated_session() {
+        let (mut host, _client) = active_with_input();
+        let session_id = host.session_id().unwrap().to_string();
+        let error = host
+            .attach_control(channel_for("other-session", 2))
+            .unwrap_err();
+        assert_eq!(error, ProtocolError::SessionMismatch);
+        host.attach_control(channel_for(&session_id, 2)).unwrap();
+        assert!(host.control().is_some());
+    }
+
+    #[test]
+    fn action_invoke_routes_through_the_session_and_advances_sequences() {
+        let (mut host, mut client) = active_with_input();
+        let session_id = host.session_id().unwrap().to_string();
+        host.attach_control(channel_for(&session_id, 2)).unwrap();
+
+        let snapshot_envelope = host.control_snapshot().unwrap().unwrap();
+        let snapshot = client
+            .accept_capability_snapshot(&snapshot_envelope)
+            .unwrap();
+        assert_eq!(snapshot.session_id.as_deref(), Some(session_id.as_str()));
+        assert!(snapshot.action("window.maximize.set").is_some());
+
+        let context = ActionContext {
+            connection_epoch: snapshot.connection_epoch.clone(),
+            session_id: snapshot.session_id.clone(),
+            grant_epoch: snapshot.grant_epoch.clone(),
+            target: snapshot.target(),
+            capability_revision: snapshot.capability_revision,
+            grants: ActionGrants {
+                desktop_actions: false,
+                window_actions: true,
+                clipboard: false,
+            },
+        };
+        let request = crate::capability::ActionRequest::new(
+            "r1",
+            &context,
+            "window.maximize.set",
+            1,
+            std::collections::BTreeMap::from([("value".to_string(), serde_json::json!(true))]),
+        )
+        .unwrap();
+        let envelope = client.action_invoke(&request).unwrap();
+        let reply = host.handle(&envelope, 1_000_001).unwrap().unwrap();
+        let result = client.accept_action_result(&reply).unwrap();
+        assert_eq!(result.status, crate::capability::ActionStatus::Completed);
+        assert_eq!(client.state(), ClientState::Active);
+        assert_eq!(host.state(), HostState::Active);
+    }
+
+    #[test]
+    fn action_invoke_without_a_dispatcher_is_a_transition_error() {
+        let (mut host, client) = active_with_input();
+        // The client still holds an active session; use a minimally valid
+        // action.invoke so only the missing dispatcher can reject it.
+        let envelope = Envelope::new(
+            client.next_client_seq(),
+            ControlMessage::ActionInvoke {
+                v: 1,
+                id: "r1".into(),
+                connection_epoch: host.session_id().unwrap().to_string(),
+                session_id: host.session_id().map(str::to_string),
+                grant_epoch: "g1".into(),
+                target_id: "w5".into(),
+                target_generation: "niri-test-w5".into(),
+                capability_revision: 1,
+                action: "window.focus".into(),
+                schema_version: 1,
+                parameters: Default::default(),
+            },
+        );
+        let error = host.handle(&envelope, 1_000_001).unwrap_err();
+        assert!(matches!(
+            error,
+            ProtocolError::InvalidTransition {
+                expected: "a capability-enabled session",
+                ..
+            }
+        ));
     }
 }

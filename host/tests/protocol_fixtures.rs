@@ -70,7 +70,9 @@ fn shared_media_record_vector_matches_the_swift_implementation() {
     assert_eq!(record.counter, 0);
     let key: [u8; 32] = hex::decode(&record.key_hex).unwrap().try_into().unwrap();
     let mut cipher = RecordCipher::new(&key, &record.session_id, Direction::ClientToHost).unwrap();
-    let sealed = cipher.seal(&hex::decode(&record.plaintext_hex).unwrap()).unwrap();
+    let sealed = cipher
+        .seal(&hex::decode(&record.plaintext_hex).unwrap())
+        .unwrap();
     assert_eq!(hex::encode(sealed), record.ciphertext_hex);
     assert_eq!(cipher.counter(), 1);
 }
