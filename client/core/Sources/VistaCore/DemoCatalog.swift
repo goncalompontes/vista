@@ -25,18 +25,18 @@ public enum DemoCatalog {
     /// is non-selectable so the preview cannot imply a host grant or a working
     /// native action.
     public static let capabilitySnapshot = CapabilitySnapshot(
-        v: 1,
+        v: UInt16(1),
         messageType: "capabilities.snapshot",
         connectionEpoch: "demo",
         sessionId: "demo",
         targetId: "w5",
         targetGeneration: "niri-demo-w5",
-        capabilityRevision: 1,
+        capabilityRevision: UInt64(1),
         grantEpoch: "demo",
         actions: [
             CapabilityAction(
                 id: "window.focus",
-                schemaVersion: 1,
+                schemaVersion: UInt16(1),
                 supported: true,
                 enabled: true,
                 reason: nil,
@@ -47,7 +47,7 @@ public enum DemoCatalog {
             ),
             CapabilityAction(
                 id: "window.maximize.set",
-                schemaVersion: 1,
+                schemaVersion: UInt16(1),
                 supported: false,
                 enabled: false,
                 reason: "Niri exposes fullscreen, not maximize",
@@ -58,7 +58,7 @@ public enum DemoCatalog {
             ),
             CapabilityAction(
                 id: "desktop.workspace.step",
-                schemaVersion: 1,
+                schemaVersion: UInt16(1),
                 supported: true,
                 enabled: true,
                 reason: nil,
@@ -69,7 +69,7 @@ public enum DemoCatalog {
             ),
             CapabilityAction(
                 id: "edit.copy",
-                schemaVersion: 1,
+                schemaVersion: UInt16(1),
                 supported: true,
                 enabled: true,
                 reason: "Clipboard grant was not approved",

@@ -1,3 +1,4 @@
+#if !SKIP
 import Foundation
 
 /// Client-side capability state and action reconciliation.
@@ -132,3 +133,5 @@ public struct CapabilitySession: Equatable, Sendable {
         self = CapabilitySession(snapshot: snapshot)
     }
 }
+
+#endif

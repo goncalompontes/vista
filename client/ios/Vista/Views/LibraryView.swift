@@ -6,7 +6,7 @@ private enum LibraryFilter: String, CaseIterable, Identifiable {
     case desktop = "On desktop"
     case independent = "Independent"
 
-    var id: Self { self }
+    var id: LibraryFilter { self }
 
     func includes(_ app: RemoteApplication) -> Bool {
         switch self {
@@ -50,8 +50,7 @@ struct LibraryView: View {
                     }
 
                     HStack(alignment: .top, spacing: 14) {
-                        Image(systemName: "wifi.slash")
-                            .foregroundStyle(VistaPalette.accent)
+                        VistaSymbol(name: "wifi.slash")
                         VStack(alignment: .leading, spacing: 5) {
                             Text("No Linux host paired")
                                 .font(.subheadline.weight(.semibold))
@@ -87,7 +86,9 @@ struct LibraryView: View {
                                             .foregroundStyle(filter == option ? VistaPalette.background : .white)
                                     }
                                     .buttonStyle(.plain)
+                                    #if !SKIP
                                     .accessibilityAddTraits(filter == option ? .isSelected : [])
+                                    #endif
                                 }
                             }
                         }
@@ -110,7 +111,11 @@ struct LibraryView: View {
                         .foregroundStyle(VistaPalette.subtleText)
                         .padding(.top, 3)
                 }
+                #if SKIP
+                .frame(maxWidth: 380)
+                #else
                 .frame(maxWidth: 850)
+                #endif
                 .padding(.horizontal, 22)
                 .padding(.top, 20)
                 .padding(.bottom, 40)
@@ -135,9 +140,7 @@ private struct ApplicationTile: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 17) {
-            Image(systemName: application.symbolName)
-                .font(.system(size: 31, weight: .medium))
-                .foregroundStyle(VistaPalette.accent)
+            VistaSymbol(name: application.symbolName, size: 31)
                 .frame(width: 58, height: 58)
                 .background(VistaPalette.elevated, in: RoundedRectangle(cornerRadius: 16))
 
@@ -160,6 +163,8 @@ private struct ApplicationTile: View {
         .padding(18)
         .frame(maxWidth: .infinity, minHeight: 187, alignment: .leading)
         .background(VistaPalette.surface, in: RoundedRectangle(cornerRadius: 21))
+        #if !SKIP
         .accessibilityElement(children: .combine)
+        #endif
     }
 }

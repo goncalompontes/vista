@@ -149,6 +149,7 @@ public struct CapabilitySnapshot: Codable, Equatable, Sendable {
 
 /// Parameters and state are deliberately bounded JSON rather than Swift types
 /// the host controls. The host validates the registered schema before executing.
+#if !SKIP
 public enum JSONValue: Codable, Equatable, Sendable {
     case null
     case bool(Bool)
@@ -423,3 +424,5 @@ public enum InputEvent: Codable, Equatable, Sendable {
         }
     }
 }
+
+#endif
