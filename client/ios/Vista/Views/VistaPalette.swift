@@ -73,6 +73,9 @@ struct VistaSymbol: View {
         case "video.slash": return "⊘"
         case "arrow.right": return "→"
         case "arrow.left": return "←"
+        case "pointer": return "⌖"
+        case "keyboard": return "⌨"
+        case "speaker.wave.2": return "♫"
         default: return "•"
         }
     }

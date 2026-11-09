@@ -65,11 +65,14 @@ struct StreamPreviewView: View {
     }
 
     private func control(_ symbol: String, label: String) -> some View {
-        Label(label, systemImage: symbol)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(VistaPalette.subtleText)
-            .frame(maxWidth: .infinity, minHeight: 52)
-            .background(VistaPalette.surface, in: RoundedRectangle(cornerRadius: 14))
-            .accessibilityLabel("\(label) unavailable in preview")
+        HStack(spacing: 6) {
+            VistaSymbol(name: symbol, size: 16)
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(VistaPalette.subtleText)
+        }
+        .frame(maxWidth: .infinity, minHeight: 52)
+        .background(VistaPalette.surface, in: RoundedRectangle(cornerRadius: 14))
+        .accessibilityLabel("\(label) unavailable in preview")
     }
 }
