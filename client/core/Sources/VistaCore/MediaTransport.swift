@@ -1,0 +1,77 @@
+#if !SKIP
+import Foundation
+
+/// One authenticated H.264 access unit from the host media channel.
+public enum MediaRecordError: Error, Equatable, CustomStringConvertible {
+    case truncated
+    case invalidLength
+    case invalidFlags
+    case emptyPayload
+    case payloadTooLarge
+
+    public var description: String {
+        switch self {
+        case .truncated: "media record is truncated"
+        case .invalidLength: "media record length is invalid"
+        case .invalidFlags: "media record flags are invalid"
+        case .emptyPayload: "media record payload is empty"
+        case .payloadTooLarge: "media record payload is too large"
+        }
+    }
+}
+
+/// The record format matches `host/src/media_transport.rs`: an eight-byte
+/// big-endian PTS, one flags byte, then one Annex-B access unit.
+public enum SecureMediaFraming {
+    public static let headerBytes = 9
+    public static let maxAccessUnitBytes = 16 * 1024 * 1024
+    public static let maxPlaintextBytes = headerBytes + maxAccessUnitBytes
+    public static let maxRecordBytes = maxPlaintextBytes + SecureRecordCipher.tagBytes
+
+    public static func decodeFrame(
+        _ frame: Data,
+        cipher: inout SecureRecordCipher
+    ) throws -> H264AccessUnit {
+        guard frame.count >= 4 else { throw MediaRecordError.truncated }
+        let length = frame.prefix(4).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+        guard length >= SecureRecordCipher.tagBytes,
+              Int(length) <= maxRecordBytes,
+              frame.count == 4 + Int(length)
+        else { throw MediaRecordError.invalidLength }
+        let plaintext = try cipher.open(frame.suffix(from: 4))
+        guard plaintext.count >= headerBytes else { throw MediaRecordError.truncated }
+        let pts = plaintext.prefix(8).reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+        let flags = plaintext[plaintext.index(plaintext.startIndex, offsetBy: 8)]
+        guard flags & 0b1111_1100 == 0 else { throw MediaRecordError.invalidFlags }
+        let bytes = Data(plaintext.dropFirst(headerBytes))
+        guard !bytes.isEmpty else { throw MediaRecordError.emptyPayload }
+        guard bytes.count <= maxAccessUnitBytes else { throw MediaRecordError.payloadTooLarge }
+        return H264AccessUnit(
+            ptsNanoseconds: pts,
+            isKeyframe: flags & 0b0000_0001 != 0,
+            discontinuity: flags & 0b0000_0010 != 0,
+            data: bytes
+        )
+    }
+
+    /// Remove complete records from a receive buffer and leave a partial tail
+    /// for the next socket read.
+    public static func drain(
+        _ buffer: inout Data,
+        cipher: inout SecureRecordCipher
+    ) throws -> [H264AccessUnit] {
+        var records: [H264AccessUnit] = []
+        while buffer.count >= 4 {
+            let length = buffer.prefix(4).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+            guard length >= SecureRecordCipher.tagBytes,
+                  Int(length) <= maxRecordBytes
+            else { throw MediaRecordError.invalidLength }
+            let total = 4 + Int(length)
+            guard buffer.count >= total else { break }
+            records.append(try decodeFrame(Data(buffer.prefix(total)), cipher: &cipher))
+            buffer.removeFirst(total)
+        }
+        return records
+    }
+}
+#endif

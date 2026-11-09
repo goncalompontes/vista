@@ -2,9 +2,9 @@
 #if !SKIP
 import SwiftUI
 
-/// Minimal pairing sheet for a real Vista host. It performs the authenticated
-/// control handshake and stops there: catalog and video arrive in later
-/// increments, so success means "paired session opened", never "streaming".
+/// Pairing sheet for a real Vista host. The session owner keeps the encrypted
+/// connection alive after this sheet closes so the library can consume the
+/// host catalog and capability snapshot.
 struct PairingView: View {
     @ObservedObject var store: LiveCatalogStore
     @Environment(\.dismiss) private var dismiss
@@ -14,9 +14,6 @@ struct PairingView: View {
     @State private var secretHex = ""
     @State private var status: String?
     @State private var isConnecting = false
-    @State private var connection: ControlClientConnection?
-    @State private var connectedHost: String?
-    @State private var connectedPairingID: String?
 
     var body: some View {
         NavigationStack {
@@ -62,11 +59,11 @@ struct PairingView: View {
                     }
                 }
 
-                if let connectedHost, let connectedPairingID {
+                if let connectedHost = store.hostName, let connectedPairingID = store.pairingID {
                     Section("Paired") {
                         LabeledContent("Host", value: connectedHost)
                         LabeledContent("Pairing id", value: connectedPairingID)
-                        Text("Control session opened. Catalog and video are not implemented yet.")
+                        Text("Control session stays connected while you browse the live catalog.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -76,21 +73,15 @@ struct PairingView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
-                        connection?.close()
                         dismiss()
                     }
                 }
-            }
-            .onDisappear {
-                connection?.close()
             }
         }
     }
 
     private func connect() {
         status = nil
-        connectedHost = nil
-        connectedPairingID = nil
         guard let portValue = UInt16(port), portValue > 0 else {
             status = "Port must be between 1 and 65535."
             return
@@ -103,48 +94,16 @@ struct PairingView: View {
             return
         }
 
-        let connection = ControlClientConnection()
-        self.connection = connection
         isConnecting = true
         status = "Connecting…"
-        connection.onEvent = { event in
-            DispatchQueue.main.async {
-                switch event {
-                case .state(.handshaking):
-                    status = "Pairing…"
-                case let .state(.failed(message)):
-                    isConnecting = false
-                    status = "Failed: \(message)"
-                case .state(.closed):
-                    isConnecting = false
-                case let .serverHello(hostName, pairingID, _):
-                    connectedHost = hostName
-                    connectedPairingID = pairingID
-                    store.setHost(hostName)
-                case let .catalog(snapshot):
-                    store.apply(snapshot, hostName: connectedHost)
-                    status = "Paired. Received \(snapshot.entries.count) window(s)."
-                case let .sessionOpened(permissions):
-                    isConnecting = false
-                    status = "Paired. Video=\(permissions.video) input=\(permissions.input)."
-                    try? PairingSecretStore.save(secret, for: host)
-                case let .rejected(reason):
-                    isConnecting = false
-                    status = "Rejected: \(reason)"
-                case let .message(message):
-                    status = message
-                case .pong:
-                    break
-                case .state(.idle), .state(.connecting), .state(.active):
-                    break
-                }
-            }
-        }
-        connection.connect(host: host, port: portValue, secret: secret) { result in
+        store.connect(host: host, port: portValue, secret: secret) { result in
             DispatchQueue.main.async {
                 isConnecting = false
                 if case let .failure(error) = result {
                     status = "Failed: \(error.localizedDescription)"
+                } else {
+                    status = "Paired. Waiting for the host catalog…"
+                    try? PairingSecretStore.save(secret, for: host)
                 }
             }
         }

@@ -84,6 +84,30 @@ public struct PermissionSet: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+/// Optional media endpoint announced on an authenticated control session.
+/// The pairing secret is intentionally not repeated here; the media endpoint
+/// performs its own handshake and derives fresh session keys.
+public struct MediaOffer: Codable, Equatable, Sendable {
+    public let v: UInt16
+    public let port: UInt16
+    public let pairingID: String
+    public let expiresAt: UInt64
+
+    public init(v: UInt16 = 1, port: UInt16, pairingID: String, expiresAt: UInt64) throws {
+        self.v = v
+        self.port = port
+        self.pairingID = pairingID
+        self.expiresAt = expiresAt
+        guard v == 1, port != 0, !pairingID.isEmpty, pairingID.utf8.count <= 128 else {
+            throw WireError.invalidField("media offer")
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case v, port, pairingID = "pairing_id", expiresAt = "expires_at"
+    }
+}
+
 public struct CatalogEntry: Codable, Equatable, Sendable, Identifiable {
     public let windowID: UInt64
     public let title: String?
@@ -242,11 +266,15 @@ public enum ControlMessage: Equatable, Sendable {
     case pairingRejected(reason: String)
     case sessionOpen(sessionID: String, permissions: PermissionSet)
     case sessionOpened(sessionID: String, permissions: PermissionSet)
+    case mediaOffer(MediaOffer)
     case keyframeRequest(sessionID: String)
     case ping(nonce: UInt64)
     case pong(nonce: UInt64)
     case sessionClose(sessionID: String?, reason: String)
     case error(code: String, message: String)
+    case capabilitySnapshot(CapabilitySnapshot)
+    case actionInvoke(ActionRequestPayload)
+    case actionResult(ActionResultPayload)
     case catalogSnapshot(CatalogSnapshot)
 
     public var typeName: String {
@@ -258,11 +286,15 @@ public enum ControlMessage: Equatable, Sendable {
         case .pairingRejected: "pairing_rejected"
         case .sessionOpen: "session_open"
         case .sessionOpened: "session_opened"
+        case .mediaOffer: "media.offer"
         case .keyframeRequest: "keyframe_request"
         case .ping: "ping"
         case .pong: "pong"
         case .sessionClose: "session_close"
         case .error: "error"
+        case .capabilitySnapshot: "capabilities.snapshot"
+        case .actionInvoke: "action.invoke"
+        case .actionResult: "action.result"
         case .catalogSnapshot: "catalog.snapshot"
         }
     }
@@ -374,6 +406,17 @@ extension ControlMessage {
             self = .sessionOpen(sessionID: try string("session_id"), permissions: try permissions())
         case "session_opened":
             self = .sessionOpened(sessionID: try string("session_id"), permissions: try permissions())
+        case "media.offer":
+            guard let version = try c.decodeIfPresent(UInt16.self, forKey: AnyCodingKey("v")),
+                  let port = try c.decodeIfPresent(UInt16.self, forKey: AnyCodingKey("port")),
+                  let expiresAt = try c.decodeIfPresent(UInt64.self, forKey: AnyCodingKey("expires_at"))
+            else { throw WireError.invalidField("media offer") }
+            self = .mediaOffer(try MediaOffer(
+                v: version,
+                port: port,
+                pairingID: try string("pairing_id"),
+                expiresAt: expiresAt
+            ))
         case "keyframe_request":
             self = .keyframeRequest(sessionID: try string("session_id"))
         case "ping":
@@ -393,6 +436,57 @@ extension ControlMessage {
             )
         case "error":
             self = .error(code: try string("code"), message: try string("message"))
+        case "capabilities.snapshot":
+            guard let v = try c.decodeIfPresent(UInt16.self, forKey: AnyCodingKey("v")),
+                  let actions = try c.decodeIfPresent([CapabilityAction].self, forKey: AnyCodingKey("actions")),
+                  let revision = try c.decodeIfPresent(UInt64.self, forKey: AnyCodingKey("capability_revision"))
+            else { throw WireError.invalidField("capability snapshot") }
+            self = .capabilitySnapshot(CapabilitySnapshot(
+                v: v,
+                messageType: type,
+                connectionEpoch: try string("connection_epoch"),
+                sessionId: try c.decodeIfPresent(String.self, forKey: AnyCodingKey("session_id")),
+                targetId: try string("target_id"),
+                targetGeneration: try string("target_generation"),
+                capabilityRevision: revision,
+                grantEpoch: try string("grant_epoch"),
+                actions: actions
+            ))
+        case "action.invoke":
+            guard let v = try c.decodeIfPresent(UInt16.self, forKey: AnyCodingKey("v")),
+                  let revision = try c.decodeIfPresent(UInt64.self, forKey: AnyCodingKey("capability_revision")),
+                  let schemaVersion = try c.decodeIfPresent(UInt16.self, forKey: AnyCodingKey("schema_version")),
+                  let parameters = try c.decodeIfPresent([String: JSONValue].self, forKey: AnyCodingKey("parameters"))
+            else { throw WireError.invalidField("action request") }
+            self = .actionInvoke(ActionRequestPayload(
+                v: v,
+                messageType: type,
+                id: try string("id"),
+                connectionEpoch: try string("connection_epoch"),
+                sessionId: try c.decodeIfPresent(String.self, forKey: AnyCodingKey("session_id")),
+                grantEpoch: try string("grant_epoch"),
+                targetId: try string("target_id"),
+                targetGeneration: try string("target_generation"),
+                capabilityRevision: revision,
+                action: try string("action"),
+                schemaVersion: schemaVersion,
+                parameters: parameters
+            ))
+        case "action.result":
+            guard let v = try c.decodeIfPresent(UInt16.self, forKey: AnyCodingKey("v")),
+                  let status = try c.decodeIfPresent(ActionStatus.self, forKey: AnyCodingKey("status"))
+            else { throw WireError.invalidField("action result") }
+            self = .actionResult(ActionResultPayload(
+                v: v,
+                messageType: type,
+                id: try string("id"),
+                connectionEpoch: try string("connection_epoch"),
+                sessionId: try c.decodeIfPresent(String.self, forKey: AnyCodingKey("session_id")),
+                status: status,
+                errorCode: try c.decodeIfPresent(ActionErrorCode.self, forKey: AnyCodingKey("error_code")),
+                state: try c.decodeIfPresent(JSONValue.self, forKey: AnyCodingKey("state")),
+                capabilityRevision: try c.decodeIfPresent(UInt64.self, forKey: AnyCodingKey("capability_revision"))
+            ))
         case "catalog.snapshot":
             self = .catalogSnapshot(try CatalogSnapshot(from: c))
         default:
@@ -434,6 +528,11 @@ extension ControlMessage {
         case let .sessionOpen(sessionID, permissions), let .sessionOpened(sessionID, permissions):
             try container.encode(sessionID, forKey: AnyCodingKey("session_id"))
             try encodePermissions(permissions)
+        case let .mediaOffer(offer):
+            try container.encode(offer.v, forKey: AnyCodingKey("v"))
+            try container.encode(offer.port, forKey: AnyCodingKey("port"))
+            try container.encode(offer.pairingID, forKey: AnyCodingKey("pairing_id"))
+            try container.encode(offer.expiresAt, forKey: AnyCodingKey("expires_at"))
         case let .keyframeRequest(sessionID):
             try container.encode(sessionID, forKey: AnyCodingKey("session_id"))
         case let .ping(nonce), let .pong(nonce):
@@ -444,10 +543,17 @@ extension ControlMessage {
         case let .error(code, message):
             try container.encode(code, forKey: AnyCodingKey("code"))
             try container.encode(message, forKey: AnyCodingKey("message"))
+        case let .capabilitySnapshot(snapshot):
+            try snapshot.encodePayload(to: &container)
+        case let .actionInvoke(request):
+            try request.encodePayload(to: &container)
+        case let .actionResult(result):
+            try result.encodePayload(to: &container)
         case let .catalogSnapshot(snapshot):
             try snapshot.encodePayload(to: &container)
         }
     }
+
 }
 
 public enum WireError: Error, Equatable, CustomStringConvertible {

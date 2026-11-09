@@ -19,6 +19,7 @@ use crate::catalog_wire::{
 };
 use crate::control_dispatch::HostControlChannel;
 use crate::control_lease::ControlLease;
+use crate::media_stream::MediaServer;
 use crate::protocol::{
     ClientSession, ControlMessage, Envelope, HostSession, HostState, MAX_CONTROL_FRAME_BYTES,
     PROTOCOL_VERSION, PairingSecret, PermissionSet, ProtocolError, SessionKeys, unix_now,
@@ -422,6 +423,7 @@ pub struct HostControlServer {
     now_secs: u64,
     control: Option<ControlSetup>,
     catalog: Option<CatalogSetup>,
+    media: Option<MediaServer>,
 }
 
 impl HostControlServer {
@@ -435,6 +437,7 @@ impl HostControlServer {
             secret,
             now_secs,
             PermissionSet::video_only(),
+            None,
             None,
             None,
         )
@@ -451,7 +454,7 @@ impl HostControlServer {
         policy: PermissionSet,
         control: Option<ControlSetup>,
     ) -> Result<(Self, ServerOffer), TransportError> {
-        Self::bind_full(address, secret, now_secs, policy, control, None)
+        Self::bind_full(address, secret, now_secs, policy, control, None, None)
     }
 
     /// Bind with an explicit permission policy and optional initial catalog
@@ -463,7 +466,7 @@ impl HostControlServer {
         policy: PermissionSet,
         catalog: Option<CatalogSetup>,
     ) -> Result<(Self, ServerOffer), TransportError> {
-        Self::bind_full(address, secret, now_secs, policy, None, catalog)
+        Self::bind_full(address, secret, now_secs, policy, None, catalog, None)
     }
 
     /// Bind with both an action policy and an initial catalog snapshot.
@@ -475,7 +478,22 @@ impl HostControlServer {
         control: Option<ControlSetup>,
         catalog: Option<CatalogSetup>,
     ) -> Result<(Self, ServerOffer), TransportError> {
-        Self::bind_full(address, secret, now_secs, policy, control, catalog)
+        Self::bind_full(address, secret, now_secs, policy, control, catalog, None)
+    }
+
+    /// Bind a control listener and an optional synthetic H.264 media producer.
+    /// The media producer uses the same out-of-band secret but performs its
+    /// own pairing handshake and derives independent media-session keys.
+    pub fn bind_with_control_catalog_and_media(
+        address: SocketAddr,
+        secret: PairingSecret,
+        now_secs: u64,
+        policy: PermissionSet,
+        control: Option<ControlSetup>,
+        catalog: Option<CatalogSetup>,
+        media: Option<MediaServer>,
+    ) -> Result<(Self, ServerOffer), TransportError> {
+        Self::bind_full(address, secret, now_secs, policy, control, catalog, media)
     }
 
     fn bind_full(
@@ -485,6 +503,7 @@ impl HostControlServer {
         policy: PermissionSet,
         control: Option<ControlSetup>,
         catalog: Option<CatalogSetup>,
+        media: Option<MediaServer>,
     ) -> Result<(Self, ServerOffer), TransportError> {
         if let Some(setup) = &control
             && (setup.capability_revision == 0)
@@ -508,6 +527,7 @@ impl HostControlServer {
                 now_secs,
                 control,
                 catalog,
+                media,
             },
             offer,
         ))
@@ -534,6 +554,7 @@ impl HostControlServer {
                         self.now_secs,
                         self.control,
                         self.catalog,
+                        self.media,
                         &mut hook,
                     );
                 }
@@ -555,6 +576,7 @@ fn serve<F>(
     now_secs: u64,
     control: Option<ControlSetup>,
     catalog: Option<CatalogSetup>,
+    media: Option<MediaServer>,
     hook: &mut F,
 ) -> Result<ServerStats, TransportError>
 where
@@ -591,6 +613,23 @@ where
             }
         }
     }
+
+    // Announce and start the optional media producer only after this control
+    // connection has authenticated. Its listener accepts one media client and
+    // derives a fresh media-session key through the same pairing protocol.
+    let _media_thread = if let Some(media_server) = media {
+        let offer = media_server.offer().clone();
+        let port = offer
+            .address
+            .parse::<SocketAddr>()
+            .map_err(|_| TransportError::Server("invalid media offer address".into()))?
+            .port();
+        let envelope = host.emit_media_offer(port, offer.pairing_id, offer.expires_at)?;
+        connection.write_envelope(&envelope)?;
+        Some(thread::spawn(move || media_server.accept_and_send()))
+    } else {
+        None
+    };
 
     if let Some(setup) = control {
         let session_id = host
@@ -753,6 +792,9 @@ pub fn connect(address: SocketAddr, secret: PairingSecret) -> Result<ClientStats
                 let snapshot = client.accept_catalog_snapshot(&envelope)?;
                 stats.catalog_entries = snapshot.entries.len();
             }
+            ControlMessage::MediaOffer { .. } => {
+                client.accept_media_offer(&envelope)?;
+            }
             ControlMessage::Pong { .. } => {
                 client.accept_pong(&envelope, 42)?;
                 pong_verified = true;
@@ -812,6 +854,9 @@ pub fn connect_control(
             ControlMessage::CatalogSnapshot { .. } => {
                 client.accept_catalog_snapshot(&envelope)?;
             }
+            ControlMessage::MediaOffer { .. } => {
+                client.accept_media_offer(&envelope)?;
+            }
             ControlMessage::CapabilitySnapshot { .. } => {
                 snapshot = Some(client.accept_capability_snapshot(&envelope)?);
                 break;
@@ -854,6 +899,9 @@ pub fn connect_control(
         match &reply.body {
             ControlMessage::CatalogSnapshot { .. } => {
                 client.accept_catalog_snapshot(&reply)?;
+            }
+            ControlMessage::MediaOffer { .. } => {
+                client.accept_media_offer(&reply)?;
             }
             ControlMessage::ActionResult { .. } => {
                 result = Some(client.accept_action_result(&reply)?);

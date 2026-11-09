@@ -162,6 +162,17 @@ pub enum ControlMessage {
         session_id: String,
         permissions: PermissionSet,
     },
+    /// Optional authenticated media endpoint announced after the control
+    /// session becomes active. The client reuses the pairing secret to perform
+    /// a second handshake on this endpoint; media keys are still derived from
+    /// that media session and are never sent on the wire.
+    #[serde(rename = "media.offer")]
+    MediaOffer {
+        v: u16,
+        port: u16,
+        pairing_id: String,
+        expires_at: u64,
+    },
     KeyframeRequest {
         session_id: String,
     },
@@ -248,6 +259,7 @@ impl ControlMessage {
             Self::PairingRejected { .. } => "pairing_rejected",
             Self::SessionOpen { .. } => "session_open",
             Self::SessionOpened { .. } => "session_opened",
+            Self::MediaOffer { .. } => "media.offer",
             Self::KeyframeRequest { .. } => "keyframe_request",
             Self::Ping { .. } => "ping",
             Self::Pong { .. } => "pong",
@@ -946,6 +958,32 @@ impl HostSession {
         Ok(self.reply(ControlMessage::from(snapshot)))
     }
 
+    /// Emit an authenticated media endpoint announcement for the active
+    /// control session. The endpoint is deliberately opt-in because the
+    /// current producer is a bounded H.264 diagnostic rather than a full
+    /// production capture service.
+    pub fn emit_media_offer(
+        &mut self,
+        port: u16,
+        pairing_id: impl Into<String>,
+        expires_at: u64,
+    ) -> Result<Envelope, ProtocolError> {
+        if self.state != HostState::Active {
+            return Err(ProtocolError::InvalidTransition {
+                expected: "an active session",
+                actual: "another state",
+            });
+        }
+        let pairing_id = pairing_id.into();
+        validate_identifier(&pairing_id)?;
+        Ok(self.reply(ControlMessage::MediaOffer {
+            v: 1,
+            port,
+            pairing_id,
+            expires_at,
+        }))
+    }
+
     fn reply(&mut self, body: ControlMessage) -> Envelope {
         let envelope = Envelope::new(self.next_host_seq, body);
         self.next_host_seq = self.next_host_seq.wrapping_add(1);
@@ -1402,6 +1440,19 @@ impl ClientSession {
                 actual: envelope.body.name(),
             }
         })
+    }
+
+    /// Consume one optional media endpoint announcement and advance the host
+    /// sequence just like every other host-owned message.
+    pub fn accept_media_offer(&mut self, envelope: &Envelope) -> Result<(), ProtocolError> {
+        self.check_host_sequence(envelope)?;
+        match &envelope.body {
+            ControlMessage::MediaOffer { .. } => Ok(()),
+            other => Err(ProtocolError::InvalidTransition {
+                expected: "media.offer",
+                actual: other.name(),
+            }),
+        }
     }
 
     pub fn keyframe_request(&mut self) -> Result<Envelope, ProtocolError> {

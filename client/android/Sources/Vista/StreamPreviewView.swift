@@ -3,12 +3,18 @@ import SwiftUI
 
 struct StreamPreviewView: View {
     let application: RemoteApplication
+    var hostCapabilities: CapabilitySnapshot?
+    var onInvoke: ((String) -> Void)?
+#if !SKIP
+    var mediaRecords: [H264AccessUnit] = []
+    var onKeyframeNeeded: (() -> Void)?
+#endif
 
     var body: some View {
         ScrollView {
             VStack(spacing: 22) {
 #if canImport(VideoToolbox) && !SKIP
-                VideoStreamView()
+                VideoStreamView(mediaRecords: mediaRecords, onKeyframeNeeded: onKeyframeNeeded)
 #else
                 ZStack {
                     RoundedRectangle(cornerRadius: 25)
@@ -38,7 +44,14 @@ struct StreamPreviewView: View {
                     Text(application.source.description)
                         .font(.subheadline)
                         .foregroundStyle(VistaPalette.accent)
-                    Text("The decoder self-test encodes synthetic frames locally. Live host video, audio, clipboard data and input are not connected yet.")
+#if !SKIP
+                    let streamDescription = mediaRecords.isEmpty
+                        ? "Waiting for an authenticated host video stream."
+                        : "Receiving authenticated H.264 frames from the paired host."
+#else
+                    let streamDescription = "Waiting for an authenticated host video stream."
+#endif
+                    Text(streamDescription)
                         .font(.subheadline)
                         .foregroundStyle(VistaPalette.subtleText)
                 }
@@ -50,10 +63,11 @@ struct StreamPreviewView: View {
                     control("speaker.wave.2", label: "Audio")
                 }
 
-                CapabilityControlsView(snapshot: DemoCatalog.capabilitySnapshot) { _ in
-                    // Discovery is real once a host is paired; the preview does
-                    // not execute native actions.
-                }
+                CapabilityControlsView(
+                    snapshot: hostCapabilities ?? DemoCatalog.capabilitySnapshot,
+                    onInvoke: onInvoke ?? { _ in },
+                    isLive: hostCapabilities != nil
+                )
             }
             #if SKIP
             .frame(maxWidth: 380)

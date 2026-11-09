@@ -22,6 +22,12 @@ struct LibraryView: View {
     var liveApplications: [RemoteApplication] = []
     var isLive = false
     var hostLabel: String?
+    var hostCapabilities: CapabilitySnapshot?
+    var onInvoke: ((String) -> Void)?
+#if !SKIP
+    var mediaRecords: [H264AccessUnit] = []
+    var onKeyframeNeeded: (() -> Void)?
+#endif
     @State private var filter: LibraryFilter = .all
 
     private var applications: [RemoteApplication] {
@@ -152,7 +158,14 @@ struct LibraryView: View {
                 }
             }
             .navigationDestination(for: RemoteApplication.self) { app in
-                StreamPreviewView(application: app)
+                StreamPreviewView(
+                    application: app,
+                    hostCapabilities: hostCapabilities,
+                    onInvoke: onInvoke
+#if !SKIP
+                    , mediaRecords: mediaRecords, onKeyframeNeeded: onKeyframeNeeded
+#endif
+                )
             }
         }
     }

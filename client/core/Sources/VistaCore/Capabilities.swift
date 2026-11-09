@@ -145,6 +145,19 @@ public struct CapabilitySnapshot: Codable, Equatable, Sendable {
     public func action(id: String) -> CapabilityAction? {
         actions.first { $0.id == id }
     }
+
+    #if !SKIP
+    func encodePayload(to container: inout KeyedEncodingContainer<AnyCodingKey>) throws {
+        try container.encode(v, forKey: AnyCodingKey("v"))
+        try container.encode(connectionEpoch, forKey: AnyCodingKey("connection_epoch"))
+        try container.encodeIfPresent(sessionId, forKey: AnyCodingKey("session_id"))
+        try container.encode(targetId, forKey: AnyCodingKey("target_id"))
+        try container.encode(targetGeneration, forKey: AnyCodingKey("target_generation"))
+        try container.encode(capabilityRevision, forKey: AnyCodingKey("capability_revision"))
+        try container.encode(grantEpoch, forKey: AnyCodingKey("grant_epoch"))
+        try container.encode(actions, forKey: AnyCodingKey("actions"))
+    }
+    #endif
 }
 
 /// Parameters and state are deliberately bounded JSON rather than Swift types
@@ -218,6 +231,22 @@ public struct ActionRequestPayload: Codable, Equatable, Sendable {
         case schemaVersion = "schema_version"
         case parameters
     }
+
+    #if !SKIP
+    func encodePayload(to container: inout KeyedEncodingContainer<AnyCodingKey>) throws {
+        try container.encode(v, forKey: AnyCodingKey("v"))
+        try container.encode(id, forKey: AnyCodingKey("id"))
+        try container.encode(connectionEpoch, forKey: AnyCodingKey("connection_epoch"))
+        try container.encodeIfPresent(sessionId, forKey: AnyCodingKey("session_id"))
+        try container.encode(grantEpoch, forKey: AnyCodingKey("grant_epoch"))
+        try container.encode(targetId, forKey: AnyCodingKey("target_id"))
+        try container.encode(targetGeneration, forKey: AnyCodingKey("target_generation"))
+        try container.encode(capabilityRevision, forKey: AnyCodingKey("capability_revision"))
+        try container.encode(action, forKey: AnyCodingKey("action"))
+        try container.encode(schemaVersion, forKey: AnyCodingKey("schema_version"))
+        try container.encode(parameters, forKey: AnyCodingKey("parameters"))
+    }
+    #endif
 }
 
 public struct ActionResultPayload: Codable, Equatable, Sendable {
@@ -242,6 +271,19 @@ public struct ActionResultPayload: Codable, Equatable, Sendable {
         case state
         case capabilityRevision = "capability_revision"
     }
+
+    #if !SKIP
+    func encodePayload(to container: inout KeyedEncodingContainer<AnyCodingKey>) throws {
+        try container.encode(v, forKey: AnyCodingKey("v"))
+        try container.encode(id, forKey: AnyCodingKey("id"))
+        try container.encode(connectionEpoch, forKey: AnyCodingKey("connection_epoch"))
+        try container.encodeIfPresent(sessionId, forKey: AnyCodingKey("session_id"))
+        try container.encode(status, forKey: AnyCodingKey("status"))
+        try container.encodeIfPresent(errorCode, forKey: AnyCodingKey("error_code"))
+        try container.encodeIfPresent(state, forKey: AnyCodingKey("state"))
+        try container.encodeIfPresent(capabilityRevision, forKey: AnyCodingKey("capability_revision"))
+    }
+    #endif
 }
 
 public struct MenuItem: Codable, Equatable, Sendable {

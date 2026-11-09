@@ -17,12 +17,19 @@ private struct VistaRootView: View {
 
     var body: some View {
         Group {
-            if showingDemo {
+            if showingDemo || catalog.isLive {
                 LibraryView(
-                    onExit: { showingDemo = false },
+                    onExit: {
+                        if catalog.isLive { catalog.clear() }
+                        showingDemo = false
+                    },
                     liveApplications: catalog.applications,
                     isLive: catalog.isLive,
-                    hostLabel: catalog.hostName
+                    hostLabel: catalog.hostName,
+                    hostCapabilities: catalog.capabilities,
+                    onInvoke: { actionID in catalog.invokeAction(id: actionID) },
+                    mediaRecords: catalog.mediaRecords,
+                    onKeyframeNeeded: { catalog.requestMediaKeyframe() }
                 )
             } else {
                 WelcomeView(

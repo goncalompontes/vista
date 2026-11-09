@@ -16,9 +16,13 @@ public enum ControlClientEvent: Equatable {
     case state(ControlClientState)
     case serverHello(hostName: String, pairingID: String, expiresAt: UInt64)
     case sessionOpened(PermissionSet)
+    case mediaOffer(MediaOffer)
+    case mediaRecord(H264AccessUnit)
     case pong(UInt64)
     case rejected(String)
     case catalog(CatalogSnapshot)
+    case capabilities(CapabilitySnapshot)
+    case actionResult(ActionResultPayload)
     case message(String)
 }
 
@@ -37,11 +41,16 @@ public final class ControlClientConnection: @unchecked Sendable {
     private var completion: ((Result<Void, Error>) -> Void)?
     private var timeoutWork: DispatchWorkItem?
     private var lastPingNonce: UInt64?
+    private var mediaConnection: MediaClientConnection?
+    private var pairingSecret: PairingSecret?
+    private var hostAddress: String?
 
     public private(set) var hostName: String?
     public private(set) var pairingID: String?
     public private(set) var policy: PermissionSet?
     public private(set) var catalog: CatalogSnapshot?
+    public private(set) var capabilitySnapshot: CapabilitySnapshot?
+    private var capabilitySession: CapabilitySession?
     public var onEvent: ((ControlClientEvent) -> Void)?
 
     public init() {}
@@ -71,6 +80,8 @@ public final class ControlClientConnection: @unchecked Sendable {
                 return completion(.failure(WireError.invalidField("port")))
             }
             self.completion = completion
+            self.pairingSecret = secret
+            self.hostAddress = host
             self.setState(.connecting)
             let connection = NWConnection(
                 host: NWEndpoint.Host(host),
@@ -113,6 +124,34 @@ public final class ControlClientConnection: @unchecked Sendable {
         }
     }
 
+    public func requestMediaKeyframe() {
+        queue.async { self.mediaConnection?.requestKeyframe() }
+    }
+
+    public func invokeAction(
+        id: String,
+        parameters: [String: JSONValue] = [:]
+    ) {
+        queue.async {
+            guard let client = self.client,
+                  client.state == .active,
+                  var session = self.capabilitySession,
+                  let action = session.action(id: id)
+            else { return }
+            var parameters = parameters
+            if id == "window.maximize.set", parameters.isEmpty {
+                parameters["value"] = .bool(action.presentation.label == "Maximize")
+            }
+            guard let request = session.makeRequest(actionID: id, parameters: parameters) else { return }
+            self.capabilitySession = session
+            do {
+                try self.send(client.actionInvoke(request))
+            } catch {
+                self.fail(error)
+            }
+        }
+    }
+
     public func close() {
         queue.async {
             if let client = self.client, client.state == .active,
@@ -121,6 +160,8 @@ public final class ControlClientConnection: @unchecked Sendable {
             }
             self.connection?.cancel()
             self.connection = nil
+            self.mediaConnection?.close()
+            self.mediaConnection = nil
             self.secure = nil
             self.buffer.removeAll()
             self.timeoutWork?.cancel()
@@ -210,6 +251,25 @@ public final class ControlClientConnection: @unchecked Sendable {
                 onEvent?(.sessionOpened(permissions))
             }
             complete(.success(()))
+        case let .mediaOffer(offer):
+            let acceptedOffer = try client.acceptMediaOffer(envelope)
+            onEvent?(.mediaOffer(acceptedOffer))
+            guard let hostAddress, let pairingSecret else { return }
+            let media = MediaClientConnection()
+            media.onRecord = { [weak self] record in
+                self?.onEvent?(.mediaRecord(record))
+            }
+            media.onMessage = { [weak self] message in
+                self?.onEvent?(.message(message))
+            }
+            mediaConnection?.close()
+            mediaConnection = media
+            media.connect(
+                host: hostAddress,
+                port: offer.port,
+                secret: pairingSecret,
+                expectedPairingID: offer.pairingID
+            )
         case let .pairingRejected(reason):
             fail(WireError.authenticationFailed)
             onEvent?(.rejected(reason))
@@ -223,6 +283,23 @@ public final class ControlClientConnection: @unchecked Sendable {
             let accepted = try client.acceptCatalogSnapshot(envelope)
             catalog = accepted
             onEvent?(.catalog(accepted))
+        case .capabilitySnapshot:
+            let accepted = try client.acceptCapabilitySnapshot(envelope)
+            capabilitySnapshot = accepted
+            if var session = capabilitySession {
+                session.reconnect(with: accepted)
+                capabilitySession = session
+            } else {
+                capabilitySession = CapabilitySession(snapshot: accepted)
+            }
+            onEvent?(.capabilities(accepted))
+        case .actionResult:
+            let result = try client.acceptActionResult(envelope)
+            if var session = capabilitySession {
+                _ = session.apply(result)
+                capabilitySession = session
+            }
+            onEvent?(.actionResult(result))
         default:
             onEvent?(.message(envelope.body.typeName))
         }

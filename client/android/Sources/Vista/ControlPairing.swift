@@ -222,6 +222,37 @@ public final class ControlPairingClient {
         return envelope
     }
 
+    public func actionInvoke(_ request: ActionRequestPayload) throws -> Envelope {
+        guard state == .active else {
+            throw WireError.invalidTransition("an active session")
+        }
+        let envelope = Envelope(seq: nextClientSeq, body: .actionInvoke(request))
+        nextClientSeq &+= 1
+        return envelope
+    }
+
+    public func acceptCapabilitySnapshot(_ envelope: Envelope) throws -> CapabilitySnapshot {
+        try checkHostSequence(envelope)
+        guard case let .capabilitySnapshot(snapshot) = envelope.body else {
+            throw WireError.unexpectedMessage(envelope.body.typeName)
+        }
+        guard snapshot.sessionId == sessionID else {
+            throw WireError.sessionMismatch
+        }
+        return snapshot
+    }
+
+    public func acceptActionResult(_ envelope: Envelope) throws -> ActionResultPayload {
+        try checkHostSequence(envelope)
+        guard case let .actionResult(result) = envelope.body else {
+            throw WireError.unexpectedMessage(envelope.body.typeName)
+        }
+        guard result.sessionId == sessionID else {
+            throw WireError.sessionMismatch
+        }
+        return result
+    }
+
     public func ping(nonce: UInt64) throws -> Envelope {
         guard state == .active else {
             throw WireError.invalidTransition("an active session")

@@ -186,8 +186,34 @@ Keep the macOS build/test path as an independent verification source.
 
 `client/android` is an experimental Android port that transpiles the shared
 SwiftUI views and `VistaCore` models into Kotlin/Jetpack Compose with Skip Lite.
-It builds on Linux (see `client/android/README.md`) and currently runs the welcome
-screen on an Android 16 emulator. The canonical UI remains in `client/ios`.
+It builds on Linux (see `client/android/README.md`). The Android application now
+uses a native Kotlin Compose entry screen for the real control path: it pairs
+with a host, consumes the live window catalog and capability snapshot, and sends
+authorized semantic actions over the same encrypted protocol as iOS. The
+Skip-generated SwiftUI module remains available for shared presentation work;
+live media and native input are still separate increments.
+
+## Physical phone prototype
+
+The current vertical slice is usable on a physical Android phone once the debug
+APK is installed and the phone can reach the Linux host over the LAN. Start the
+host listener on a LAN address with an explicit window policy, for example:
+
+```sh
+vista-host protocol-serve --confirm --listen 0.0.0.0:7443 \
+  --allow-remote --window WINDOW_ID --allow-window-actions --catalog --json
+```
+
+Enter the host's address, port and 64-character secret in the Android screen.
+The host firewall must allow TCP 7443, and the phone and host must be on a
+network that permits device-to-device traffic. The same pairing flow works from
+the iOS client, but a physical iPhone requires a signed device build: macOS with
+Xcode, an Apple development team, a provisioned `dev.vista.client` bundle ID,
+the first-run local-network permission, and the device trusted by Xcode. The
+Linux `xtool` IPA is useful for the vphone experiment but is not a substitute
+for Apple device signing. Live host video, audio, clipboard and native input
+remain unavailable on both phones until their transport and permission paths
+are implemented.
 
 ## Building on a Mac
 

@@ -7,6 +7,7 @@ import SwiftUI
 struct CapabilityControlsView: View {
     let snapshot: CapabilitySnapshot
     let onInvoke: (String) -> Void
+    var isLive = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -45,7 +46,7 @@ struct CapabilityControlsView: View {
                 .accessibilityHint(hint(for: action))
             }
 
-            Text("Demo capability set — no host is paired and no native action runs.")
+            Text(isLive ? "Actions are authorized by the paired host." : "Demo capability set — no host is paired and no native action runs.")
                 .font(.caption2)
                 .foregroundStyle(VistaPalette.subtleText)
         }

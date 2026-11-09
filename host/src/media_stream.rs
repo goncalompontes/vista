@@ -42,7 +42,7 @@ const WAIT: Duration = Duration::from_secs(10);
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 const CONTROL_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct MediaOffer {
     pub protocol: String,
     pub address: String,
@@ -566,17 +566,30 @@ pub struct MediaServer {
     host: HostSession,
     now_secs: u64,
     frames: usize,
+    offer: MediaOffer,
 }
 
 impl MediaServer {
     pub fn bind(address: SocketAddr, frames: usize) -> Result<(Self, MediaOffer), String> {
+        let secret =
+            PairingSecret::generate().map_err(|error| format!("pairing secret: {error}"))?;
+        Self::bind_with_secret(address, frames, secret)
+    }
+
+    /// Bind a synthetic media producer using a caller-owned pairing secret.
+    /// The control server uses this to announce a second media endpoint after
+    /// the primary session is authenticated; the media handshake still derives
+    /// independent keys and never transmits the secret.
+    pub fn bind_with_secret(
+        address: SocketAddr,
+        frames: usize,
+        secret: PairingSecret,
+    ) -> Result<(Self, MediaOffer), String> {
         let listener = TcpListener::bind(address)
             .map_err(|error| format!("cannot bind media listener: {error}"))?;
         let address = listener
             .local_addr()
             .map_err(|error| format!("cannot read media address: {error}"))?;
-        let secret =
-            PairingSecret::generate().map_err(|error| format!("pairing secret: {error}"))?;
         let now_secs = unix_now();
         let host = HostSession::new(
             "vista-media-host",
@@ -594,15 +607,18 @@ impl MediaServer {
             expires_at: host.expires_at(),
             frames,
         };
-        Ok((
-            Self {
-                listener,
-                host,
-                now_secs,
-                frames,
-            },
-            offer,
-        ))
+        let server = Self {
+            listener,
+            host,
+            now_secs,
+            frames,
+            offer: offer.clone(),
+        };
+        Ok((server, offer))
+    }
+
+    pub fn offer(&self) -> &MediaOffer {
+        &self.offer
     }
 
     pub fn accept_and_send(self) -> Result<ProducerStats, String> {

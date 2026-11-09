@@ -38,7 +38,7 @@ fn usage() {
     eprintln!("       vista-host protocol-test [--json]");
     eprintln!("       vista-host protocol-loopback [--json]");
     eprintln!(
-        "       vista-host protocol-serve --confirm [--listen ADDR] [--secret-hex HEX] [--window ID --allow-window-actions|--allow-desktop-actions|--allow-clipboard|--allow-input] [--fake-actions] [--capability-revision N] [--catalog] [--allow-remote] [--json]"
+        "       vista-host protocol-serve --confirm [--listen ADDR] [--secret-hex HEX] [--window ID --allow-window-actions|--allow-desktop-actions|--allow-clipboard|--allow-input] [--fake-actions] [--capability-revision N] [--catalog] [--media] [--allow-remote] [--json]"
     );
     eprintln!("       vista-host keyframe-control-test [--json]");
     eprintln!("       vista-host media-stream --serve [--listen ADDR] [--frames N] [--json]");
@@ -838,6 +838,7 @@ fn protocol_serve(args: &[&str], json: bool, niri: &Niri) -> Result<(), NiriErro
             "--allow-input",
             "--fake-actions",
             "--catalog",
+            "--media",
         ],
     )?;
     if !args.contains(&"--confirm") {
@@ -974,15 +975,40 @@ fn protocol_serve(args: &[&str], json: bool, niri: &Niri) -> Result<(), NiriErro
         None
     };
     let catalog_entries = catalog.as_ref().map_or(0, |setup| setup.entries.len());
-    let (server, offer) = vista_host::transport::HostControlServer::bind_with_control_and_catalog(
-        address,
-        secret.clone(),
-        protocol::unix_now(),
-        policy,
-        control,
-        catalog,
-    )
-    .map_err(|error| NiriError::Unavailable(format!("cannot bind control listener: {error}")))?;
+    let media = if args.contains(&"--media") {
+        let media_address = SocketAddr::new(address.ip(), 0);
+        let (server, _offer) = vista_host::media_stream::MediaServer::bind_with_secret(
+            media_address,
+            120,
+            secret.clone(),
+        )
+        .map_err(|error| NiriError::Unavailable(format!("cannot bind media listener: {error}")))?;
+        Some(server)
+    } else {
+        None
+    };
+    let media_info = media.as_ref().map(|server| {
+        let offer = server.offer();
+        serde_json::json!({
+            "port": offer.address.parse::<SocketAddr>().map(|address| address.port()).unwrap_or(0),
+            "pairing_id": offer.pairing_id,
+            "expires_at": offer.expires_at,
+            "frames": offer.frames,
+        })
+    });
+    let (server, offer) =
+        vista_host::transport::HostControlServer::bind_with_control_catalog_and_media(
+            address,
+            secret.clone(),
+            protocol::unix_now(),
+            policy,
+            control,
+            catalog,
+            media,
+        )
+        .map_err(|error| {
+            NiriError::Unavailable(format!("cannot bind control listener: {error}"))
+        })?;
     let invite = serde_json::json!({
         "protocol": "1.0",
         "address": offer.address.to_string(),
@@ -991,6 +1017,7 @@ fn protocol_serve(args: &[&str], json: bool, niri: &Niri) -> Result<(), NiriErro
         "expires_at": offer.expires_at,
         "control": control_info,
         "catalog_entries": catalog_entries,
+        "media": media_info,
     });
     if json {
         println!("{}", serde_json::to_string(&invite)?);
@@ -1019,6 +1046,12 @@ fn protocol_serve(args: &[&str], json: bool, niri: &Niri) -> Result<(), NiriErro
         }
         if catalog_entries > 0 {
             println!("Catalog snapshot enabled with {catalog_entries} window(s).");
+        }
+        if let Some(info) = &media_info {
+            println!(
+                "Synthetic H.264 media endpoint enabled on port {} ({} frames).",
+                info["port"], info["frames"]
+            );
         }
         io::stdout().flush()?;
     }

@@ -27,11 +27,19 @@ public struct SecureRecordCipher {
 
     private let key: SymmetricKey
     private let aad: Data
+    private let maxPlaintextBytes: Int
     private var counter: UInt64 = 0
 
-    public init(key: [UInt8], sessionID: String, direction: RecordDirection) throws {
+    public init(
+        key: [UInt8],
+        sessionID: String,
+        direction: RecordDirection,
+        maxPlaintextBytes: Int = Self.maxFrameBytes
+    ) throws {
         guard key.count == 32 else { throw WireError.invalidNonce }
+        guard maxPlaintextBytes > 0 else { throw WireError.frameTooLarge }
         self.key = SymmetricKey(data: key)
+        self.maxPlaintextBytes = maxPlaintextBytes
         var aad = Data("vista-record-v1".utf8)
         aad.append(Data(sessionID.utf8))
         aad.append(direction.tag)
@@ -51,7 +59,7 @@ public struct SecureRecordCipher {
     }
 
     public mutating func seal(_ plaintext: Data) throws -> Data {
-        guard plaintext.count <= Self.maxFrameBytes else { throw WireError.frameTooLarge }
+        guard plaintext.count <= maxPlaintextBytes else { throw WireError.frameTooLarge }
         let sealed = try ChaChaPoly.seal(
             plaintext,
             using: key,
@@ -64,7 +72,7 @@ public struct SecureRecordCipher {
 
     public mutating func open(_ ciphertext: Data) throws -> Data {
         guard ciphertext.count >= Self.tagBytes,
-              ciphertext.count <= Self.maxRecordBytes
+              ciphertext.count <= maxPlaintextBytes + Self.tagBytes
         else {
             throw WireError.frameTooLarge
         }

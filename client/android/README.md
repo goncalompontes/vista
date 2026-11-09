@@ -5,9 +5,11 @@ models as the iOS client, using [Skip](https://skip.dev) Lite mode. Skip
 transpiles Swift/SwiftUI into Kotlin/Jetpack Compose at build time; the shipped
 app contains no Skip runtime.
 
-**Status:** the welcome screen runs on an Android 16 emulator. This is a UI
-port, not a connected client: discovery, pairing, media and input are not
-implemented yet.
+**Status:** the native Android entry screen has a working encrypted control
+path. It pairs with a Vista host, receives the capability snapshot, displays
+the live action policy and sends authorized semantic actions. The control path
+has been exercised against the Rust host on an Android 16 emulator. Media,
+touch/keyboard input and clipboard remain separate increments.
 
 ## Source of truth
 
@@ -52,11 +54,37 @@ echo no | avdmanager create avd -n VistaPixel \
 emulator -avd VistaPixel -no-snapshot -no-audio -gpu swiftshader_indirect -no-window
 ```
 
+## Physical Android prototype
+
+The debug APK can run on a physical Android phone. Build it, install it with
+ADB, and make sure the phone can reach the host over the same LAN:
+
+```sh
+./build-android.sh
+adb install -r .build/Android/app/outputs/apk/debug/app-debug.apk
+adb shell am start -n dev.vista.client/vista.module.MainActivity
+```
+
+Start a host listener on a reachable address with an explicit policy. For a
+real Niri window, replace `WINDOW_ID` with an existing window ID:
+
+```sh
+vista-host protocol-serve --confirm --listen 0.0.0.0:7443 \
+  --allow-remote --window WINDOW_ID --allow-window-actions --catalog --json
+```
+
+Allow TCP port 7443 through the host firewall, then enter the host IP, port
+and 64-character pairing secret shown by the listener. Wi-Fi networks with
+client isolation must allow phone-to-host traffic.
+
 ## Known gaps
 
 - Unsupported SF Symbols and accessibility modifiers are omitted or replaced on
   Android (`#if SKIP`); the visual design follows the iOS tokens but Android
   uses Material navigation and system conventions.
-- No host protocol, video decoder, input injection or clipboard support yet.
+- Host pairing, encrypted control records, capability snapshots and semantic
+  actions are implemented. Host live media transport, Android video decoding,
+  native input injection, touch/keyboard UI, audio and clipboard are not yet
+  wired.
 - The `Darwin`/Xcode side of the Skip project is not included; the native iOS
   app remains `client/ios`.

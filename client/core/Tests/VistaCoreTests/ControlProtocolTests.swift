@@ -75,18 +75,76 @@ final class ControlProtocolTests: XCTestCase {
             .pairingRejected(reason: "denied"),
             .sessionOpen(sessionID: String(repeating: "55", count: 16), permissions: PermissionSet(video: true, input: true)),
             .sessionOpened(sessionID: String(repeating: "55", count: 16), permissions: .videoOnly),
+            .mediaOffer(try MediaOffer(
+                port: 7444,
+                pairingID: String(repeating: "66", count: 16),
+                expiresAt: 1_700_000_000
+            )),
             .keyframeRequest(sessionID: String(repeating: "55", count: 16)),
             .ping(nonce: 42),
             .pong(nonce: 42),
             .sessionClose(sessionID: String(repeating: "55", count: 16), reason: "done"),
             .sessionClose(sessionID: nil, reason: "anonymous close"),
             .error(code: "denied", message: "no"),
+            .capabilitySnapshot(CapabilitySnapshot(
+                v: 1,
+                messageType: "capabilities.snapshot",
+                connectionEpoch: "c1",
+                sessionId: "s1",
+                targetId: "w5",
+                targetGeneration: "niri-boot1-w5",
+                capabilityRevision: 12,
+                grantEpoch: "g2",
+                actions: [CapabilityAction(
+                    id: "window.focus",
+                    schemaVersion: 1,
+                    supported: true,
+                    enabled: true,
+                    reason: nil,
+                    authorization: .granted,
+                    parameters: "vista.empty.v1",
+                    presentation: ActionPresentation(label: "Focus window"),
+                    suggestedBindings: []
+                )]
+            )),
+            .actionInvoke(ActionRequestPayload(
+                v: 1,
+                messageType: "action.invoke",
+                id: "r1",
+                connectionEpoch: "c1",
+                sessionId: "s1",
+                grantEpoch: "g2",
+                targetId: "w5",
+                targetGeneration: "niri-boot1-w5",
+                capabilityRevision: 12,
+                action: "window.focus",
+                schemaVersion: 1,
+                parameters: [:]
+            )),
+            .actionResult(ActionResultPayload(
+                v: 1,
+                messageType: "action.result",
+                id: "r1",
+                connectionEpoch: "c1",
+                sessionId: "s1",
+                status: .completed,
+                errorCode: nil,
+                state: nil,
+                capabilityRevision: 13
+            )),
             .catalogSnapshot(catalog)
         ]
         for (index, message) in messages.enumerated() {
             let envelope = Envelope(seq: UInt64(index), body: message)
             let framed = try ControlFraming.encode(envelope)
-            XCTAssertEqual(try ControlFraming.decode(framed), envelope)
+            let decoded: Envelope
+            do {
+                decoded = try ControlFraming.decode(framed)
+            } catch {
+                print("message index", index, String(data: framed.dropFirst(4), encoding: .utf8) ?? "<binary>")
+                throw error
+            }
+            XCTAssertEqual(decoded, envelope)
         }
     }
 

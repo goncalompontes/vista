@@ -60,10 +60,8 @@ open class MainActivity: AppCompatActivity {
         enableEdgeToEdge()
 
         setContent {
-            val saveableStateHolder = rememberSaveableStateHolder()
-            saveableStateHolder.SaveableStateProvider(true) {
-                PresentationRootView(ComposeContext())
-                SideEffect { saveableStateHolder.removeState(true) }
+            MaterialTheme {
+                VistaAndroidRoot()
             }
         }
 

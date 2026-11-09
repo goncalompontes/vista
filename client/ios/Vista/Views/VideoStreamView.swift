@@ -2,12 +2,16 @@
 import AVFoundation
 import SwiftUI
 import UIKit
+import VistaCore
 
 /// SwiftUI host for the VideoToolbox-backed sample-buffer layer. It offers a
 /// synthetic self-test so simulator work does not require a live host; a real
 /// host transport will call `controller.receive` with media records.
 struct VideoStreamView: View {
+    let mediaRecords: [H264AccessUnit]
+    let onKeyframeNeeded: (() -> Void)?
     @StateObject private var controller = VideoStreamController()
+    @State private var consumedMediaRecords = 0
 
     var body: some View {
         VStack(spacing: 12) {
@@ -48,8 +52,21 @@ struct VideoStreamView: View {
             }
             .font(.caption)
         }
-        .onAppear { controller.start() }
+        .onAppear {
+            controller.onKeyframeNeeded = onKeyframeNeeded
+            controller.start()
+            consumeMediaRecords()
+        }
+        .onChange(of: mediaRecords.count) { _ in consumeMediaRecords() }
         .onDisappear { controller.stop() }
+    }
+
+    private func consumeMediaRecords() {
+        guard consumedMediaRecords < mediaRecords.count else { return }
+        for record in mediaRecords.dropFirst(consumedMediaRecords) {
+            controller.receive(record)
+        }
+        consumedMediaRecords = mediaRecords.count
     }
 }
 
