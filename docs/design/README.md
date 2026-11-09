@@ -54,3 +54,8 @@ The architecture and implementation plan is being extended with **four sequentia
 4. **[Native client interaction specification](client-experience-implementation-spec.md)** and [fake-host reducer fixtures](client-state-fixtures.json). Capability-only UI, viewer-only and picker-only flows, input scope, gesture precedence, coordinate mapping, keyboard/IME, clipboard privacy, accessibility and iOS/Android parity. Tracked by #4/#7/#34/#74/#75.
 
 This package is intentionally stacked on [host-portability PR #67](https://github.com/goncalompontes/vista/pull/67). Accept ADR 0002 and confirm cross-domain semantics before treating these drafts as binding. Existing prototype design and implementation claims remain historical until #64.
+
+
+## Follow-up technical architecture review (2026-11-09)
+
+[Review findings and decision gates](../reviews/2026-11-09-architecture-gates.md) conditionally endorse provider/permission/source boundaries and enumerate runtime/schema/security and license proof still required. [ADR 0003](../adr/0003-device-identity-enrollment.md) proposes restricted QR-pinned TLS + PKCS#10 CSR + issued X.509 client certificate + paired mTLS signaling; #77 must test real Rust/iOS/Android TLS identity behavior. [ADR 0004](../adr/0004-license-and-niri-ipc-policy.md) recommends Apache-2.0 and an independently authored direct Niri JSON socket provider, pending explicit license decision #73. Draft Protobuf verification is split into #78. No `LICENSE` change and no production security acceptance is implied.
