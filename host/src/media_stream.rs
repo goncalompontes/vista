@@ -11,6 +11,7 @@
 
 use crate::{
     media::{H264Encoder, decoder_candidates, probe_encoders},
+    media_transport::{MediaError, MediaRecord, media_cipher, read_record, write_record},
     protocol::{
         ClientSession, Envelope, HostSession, HostState, MAX_CONTROL_FRAME_BYTES, PairingSecret,
         PermissionSet, SessionKeys, unix_now,
@@ -260,33 +261,6 @@ fn read_control_requests(
     Ok(accepted)
 }
 
-fn write_record(
-    stream: &mut TcpStream,
-    cipher: &mut RecordCipher,
-    pts: u64,
-    keyframe: bool,
-    bytes: &[u8],
-) -> Result<usize, String> {
-    let mut plaintext = Vec::with_capacity(9 + bytes.len());
-    plaintext.extend_from_slice(&pts.to_be_bytes());
-    plaintext.push(u8::from(keyframe));
-    plaintext.extend_from_slice(bytes);
-    let sealed = cipher
-        .seal(&plaintext)
-        .map_err(|error| format!("media seal failed: {error}"))?;
-    let length = u32::try_from(sealed.len()).map_err(|_| "record too large".to_string())?;
-    stream
-        .write_all(&length.to_be_bytes())
-        .map_err(|error| format!("media write failed: {error}"))?;
-    stream
-        .write_all(&sealed)
-        .map_err(|error| format!("media write failed: {error}"))?;
-    stream
-        .flush()
-        .map_err(|error| format!("media flush failed: {error}"))?;
-    Ok(4 + sealed.len())
-}
-
 fn send_frames(
     stream: &mut TcpStream,
     key: &[u8; 32],
@@ -310,7 +284,7 @@ fn send_frames(
         pipeline
             .set_state(gst::State::Playing)
             .map_err(|error| format!("cannot start producer: {error}"))?;
-        let mut cipher = RecordCipher::new(key, session_id, Direction::HostToClient)
+        let mut cipher = media_cipher(key, session_id, Direction::HostToClient)
             .map_err(|error| format!("media cipher: {error}"))?;
         let deadline = started + WAIT;
         let mut sent = 0;
@@ -363,7 +337,10 @@ fn send_frames(
                 .unwrap_or(0)
                 .saturating_add(pts_offset);
             let keyframe = !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT);
-            bytes_sent += write_record(stream, &mut cipher, pts, keyframe, data.as_slice())?;
+            let record = MediaRecord::new(pts, keyframe, false, data.as_slice())
+                .map_err(|error| format!("media record: {error}"))?;
+            bytes_sent += write_record(stream, &mut cipher, &record)
+                .map_err(|error| format!("media write failed: {error}"))?;
             sent += 1;
         }
         if sent == 0 {
@@ -462,9 +439,8 @@ pub fn receive_frames(
         pipeline
             .set_state(gst::State::Playing)
             .map_err(|error| format!("cannot start consumer: {error}"))?;
-        let mut cipher =
-            RecordCipher::new(keys.host_to_client(), session_id, Direction::HostToClient)
-                .map_err(|error| format!("media cipher: {error}"))?;
+        let mut cipher = media_cipher(keys.host_to_client(), session_id, Direction::HostToClient)
+            .map_err(|error| format!("media cipher: {error}"))?;
         let mut control_cipher =
             RecordCipher::new(keys.client_to_host(), session_id, Direction::ClientToHost)
                 .map_err(|error| format!("control cipher: {error}"))?;
@@ -500,29 +476,14 @@ pub fn receive_frames(
                     .map_err(|error| format!("keyframe shutdown: {error}"))?;
                 keyframe_requests_sent = 1;
             }
-            let mut length = [0u8; 4];
-            match stream.read_exact(&mut length) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            let record = match read_record(&mut stream, &mut cipher) {
+                Ok(record) => record,
+                Err(MediaError::Truncated) => break,
                 Err(error) => return Err(format!("media read failed: {error}")),
-            }
-            let length = u32::from_be_bytes(length) as usize;
-            if length == 0 || length > MAX_RECORD_BYTES {
-                return Err(format!("invalid media record length: {length}"));
-            }
-            let mut ciphertext = vec![0u8; length];
-            stream
-                .read_exact(&mut ciphertext)
-                .map_err(|error| format!("media read failed: {error}"))?;
-            let plaintext = cipher
-                .open(&ciphertext)
-                .map_err(|error| format!("media open failed: {error}"))?;
-            if plaintext.len() < 9 {
-                return Err("media record is too short".into());
-            }
-            let pts = u64::from_be_bytes(plaintext[..8].try_into().expect("eight bytes"));
+            };
+            let pts = record.pts_ns;
             received.insert(pts, Instant::now());
-            let mut buffer = gst::Buffer::from_mut_slice(plaintext[9..].to_vec());
+            let mut buffer = gst::Buffer::from_mut_slice(record.bytes);
             if let Some(writable) = buffer.get_mut() {
                 writable.set_pts(gst::ClockTime::from_nseconds(pts));
                 writable.set_duration(gst::ClockTime::from_nseconds(1_000_000_000 / 30));
