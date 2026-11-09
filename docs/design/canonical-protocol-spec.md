@@ -53,7 +53,7 @@ UntrustedDiscovered -> PinnedTlsConnected -> BootstrapHello -> VersionSelected
   -> DataChannelEstablished -> ControlHello -> SnapshotSynced
 ```
 
-A new pairing enrollment requires a QR-supplied pin + one-time secret (see security spec). Reject after version mismatch before any authorization or media. Client-authenticated paired sessions may use mTLS or an equivalent well-reviewed signed challenge *chosen by #59*; new code MUST NOT rely on a client-provided public key string as proof. An SDP fingerprint is bound to the authenticated signaling session, and the DTLS identity is checked via the WebRTC library before sending frames. `connection_id` is fresh for each PeerConnection and never reused across reconnections.
+A new pairing enrollment requires a QR-supplied pin + one-time secret (see security spec). Reject after version mismatch before any authorization or media. Preferred pairing candidate is [ADR 0003](../adr/0003-device-identity-enrollment.md): a restricted QR-pinned TLS enrollment route verifies a **signed PKCS#10 CSR**, the host issues an approved constrained X.509 client certificate, and the client reconnects to a separate **mTLS-authenticated signaling** route. Native Rust/iOS/Android TLS identity interoperability must be proved by #77; unreviewed signed-challenge fallback is not allowed. A client-provided public key string alone is never proof. An SDP fingerprint is bound to the authenticated signaling session, and the DTLS identity is checked via the WebRTC library before sending frames. `connection_id` is fresh for each PeerConnection and never reused across reconnections.
 
 ### Catalog/capabilities
 
