@@ -396,10 +396,17 @@ snapshot and a completed action, and confirms duplicate, revoked, stale-grant,
 wrong-session, wrong-target and malformed requests are rejected.
 
 Native pointer/keyboard injection and menu retrieval from real applications are
-still open. `protocol-serve` remains video-only: it does not yet construct an
-action policy or attach a desktop backend, so the dispatcher is proven at the
-session layer and through the diagnostic rather than through the TCP listener.
-Client UI wiring and live Niri action verification also remain open.
+still open. The one-shot `protocol-serve` listener remains video-only by default,
+but now accepts an explicit action policy:
+`--window ID` plus `--allow-window-actions`, `--allow-desktop-actions`,
+`--allow-clipboard` and/or `--allow-input`. With a policy it attaches the
+dispatcher after `SessionOpened`, pushes the grant-scoped snapshot, and routes
+`action.invoke`; `--fake-actions` selects the deterministic backend for
+diagnostics, while the default uses `NiriActionBackend` against the named window.
+`protocol-client --action ID --allow-input` reads the snapshot and sends one
+action, and the CLI integration tests prove the granted and ungranted paths over
+the encrypted socket. Client UI wiring, native input injection and live Niri
+action verification remain open.
 
 ## Implemented, verified and pending
 
