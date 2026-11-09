@@ -12,7 +12,7 @@ A versioned, transport-neutral control protocol now exists in `host/src/protocol
 
 ## Develop
 
-Requirements: Rust/Cargo, a running Niri compositor and the `niri` executable on PATH. The optional `capture-frame` diagnostic also needs GStreamer development libraries and plugins (`gstreamer-1.0`, `gstreamer-app-1.0`, `pipewiresrc`, `videoconvert` and `appsink`), PipeWire and a working desktop ScreenCast portal.
+Requirements: Rust 1.88+ (edition 2024), a running Niri compositor and the `niri` executable on PATH. CI runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` on Ubuntu with the GStreamer development packages. The optional `capture-frame` diagnostic also needs GStreamer development libraries and plugins (`gstreamer-1.0`, `gstreamer-app-1.0`, `pipewiresrc`, `videoconvert` and `appsink`), PipeWire and a working desktop ScreenCast portal.
 
 ```sh
 cd host
