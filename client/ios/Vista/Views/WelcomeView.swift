@@ -27,6 +27,9 @@ struct WelcomeView: View {
                         .foregroundStyle(VistaPalette.subtleText)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
+                        #if SKIP
+                        .frame(maxWidth: 330)
+                        #endif
 
                     VStack(alignment: .leading, spacing: 17) {
                         feature("macwindow", "Your open windows")
@@ -43,7 +46,11 @@ struct WelcomeView: View {
                     Button(action: onExplore) {
                         HStack(spacing: 10) {
                             Text("Explore the app preview")
+                            #if SKIP
+                            Text("→")
+                            #else
                             Image(systemName: "arrow.right")
+                            #endif
                         }
                         .font(.headline)
                         .frame(maxWidth: .infinity, minHeight: 54)

@@ -6,7 +6,7 @@ private enum LibraryFilter: String, CaseIterable, Identifiable {
     case desktop = "On desktop"
     case independent = "Independent"
 
-    var id: Self { self }
+    var id: LibraryFilter { self }
 
     func includes(_ app: RemoteApplication) -> Bool {
         switch self {
@@ -87,7 +87,9 @@ struct LibraryView: View {
                                             .foregroundStyle(filter == option ? VistaPalette.background : .white)
                                     }
                                     .buttonStyle(.plain)
+                                    #if !SKIP
                                     .accessibilityAddTraits(filter == option ? .isSelected : [])
+                                    #endif
                                 }
                             }
                         }
@@ -160,6 +162,8 @@ private struct ApplicationTile: View {
         .padding(18)
         .frame(maxWidth: .infinity, minHeight: 187, alignment: .leading)
         .background(VistaPalette.surface, in: RoundedRectangle(cornerRadius: 21))
+        #if !SKIP
         .accessibilityElement(children: .combine)
+        #endif
     }
 }

@@ -12,6 +12,18 @@ struct VistaLogo: View {
     var size: CGFloat = 68
 
     var body: some View {
+        #if SKIP
+        ZStack {
+            Color.clear
+            RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
+                .fill(Color(red: 0.50, green: 0.64, blue: 0.98))
+            RoundedRectangle(cornerRadius: size * 0.10, style: .continuous)
+                .fill(Color.white)
+                .padding(size * 0.30)
+        }
+        .frame(width: size, height: size)
+        .accessibilityLabel("Vista")
+        #else
         Image(systemName: "rectangle.on.rectangle")
             .font(.system(size: size * 0.45, weight: .semibold, design: .rounded))
             .foregroundStyle(.white)
@@ -25,5 +37,6 @@ struct VistaLogo: View {
                 in: RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
             )
             .accessibilityLabel("Vista")
+        #endif
     }
 }

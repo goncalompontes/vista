@@ -16,7 +16,11 @@ struct CapabilityControlsView: View {
                     .foregroundStyle(.white)
                 Spacer()
                 Text("rev \(snapshot.capabilityRevision)")
+                    #if SKIP
+                    .font(.caption)
+                    #else
                     .font(.caption.monospacedDigit())
+                    #endif
                     .foregroundStyle(VistaPalette.subtleText)
             }
 

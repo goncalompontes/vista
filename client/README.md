@@ -166,6 +166,13 @@ SwiftUI compilation must actually be exercised before describing the
 environment as working; static project files alone are not a validated setup.
 Keep the macOS build/test path as an independent verification source.
 
+## Android client (Skip Lite)
+
+`client/android` is an experimental Android port that transpiles the shared
+SwiftUI views and `VistaCore` models into Kotlin/Jetpack Compose with Skip Lite.
+It builds on Linux (see `client/android/README.md`) and currently runs the welcome
+screen on an Android 16 emulator. The canonical UI remains in `client/ios`.
+
 ## Building on a Mac
 
 Install a supported Xcode release and the XcodeGen generator:
