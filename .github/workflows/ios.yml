@@ -1,0 +1,35 @@
+name: iOS client
+
+on:
+  push:
+    paths:
+      - "client/**"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    paths:
+      - "client/**"
+      - ".github/workflows/ios.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  ios-simulator:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Test portable Swift models
+        run: swift test --package-path client/core
+      - name: Generate Xcode project
+        working-directory: client/ios
+        run: xcodegen generate
+      - name: Build unsigned iOS Simulator application
+        working-directory: client/ios
+        run: >
+          xcodebuild -project Vista.xcodeproj
+          -scheme Vista -configuration Debug
+          -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO build
