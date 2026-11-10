@@ -1,0 +1,14 @@
+[package]
+name = "vista-protobuf-candidate"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Deliberately independent of the production host/GStreamer workspace.
+[workspace]
+
+[dependencies]
+prost = "=0.13.5"
+
+[build-dependencies]
+prost-build = "=0.13.5"

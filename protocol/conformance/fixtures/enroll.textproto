@@ -1,0 +1,1 @@
+version { major: 1 } request_id: "\000\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017" pairing_enroll { invitation_id: "\000\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017" one_time_secret: "synthetic-invite-not-a-secret" client_certificate_request_der: "\060\003\002\001\001" device_label: "Fixture client" }

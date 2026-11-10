@@ -1,0 +1,1 @@
+outcome: PAIRING_APPROVED enrolled_client_id: "\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037" client_certificate_der: "\060\003\002\001\002" issuing_ca_certificate_der: "\060\003\002\001\003" expires_at_unix_ms: 2000000000000

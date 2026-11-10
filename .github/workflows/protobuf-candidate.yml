@@ -1,0 +1,50 @@
+name: Protobuf candidate conformance
+on:
+  pull_request:
+    paths:
+      - 'proto/**'
+      - 'protocol/conformance/**'
+      - 'buf.yaml'
+      - '.github/workflows/protobuf-candidate.yml'
+  push:
+    paths:
+      - 'proto/**'
+      - 'protocol/conformance/**'
+      - 'buf.yaml'
+      - '.github/workflows/protobuf-candidate.yml'
+permissions:
+  contents: read
+jobs:
+  rust-jvm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Generate from pinned toolchain
+        run: |
+          python3 protocol/conformance/scripts/tools.py
+          python3 protocol/conformance/scripts/generate.py
+      - name: Buf format and lint
+        run: |
+          protocol/conformance/.cache/buf-1.50.0 lint
+          protocol/conformance/.cache/buf-1.50.0 format -d --exit-code
+      - name: Rust conformance
+        run: |
+          PROTOC="$PWD/protocol/conformance/.cache/protoc-29.3/bin/protoc" cargo test --locked --manifest-path protocol/conformance/rust/Cargo.toml
+      - name: JavaLite (Android wire compatibility, not Android device)
+        run: python3 protocol/conformance/scripts/test_jvm.py
+      - name: Generation deterministic
+        run: |
+          python3 protocol/conformance/scripts/generate.py
+          git diff --exit-code -- proto protocol/conformance/generated protocol/conformance/fixtures/golden.tsv
+  swift-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Generate pinned Swift protobuf code
+        run: |
+          python3 protocol/conformance/scripts/tools.py
+          python3 protocol/conformance/scripts/generate.py --swift
+      - name: Test Swift protobuf fixtures
+        run: swift test --package-path protocol/conformance/swift

@@ -11,3 +11,11 @@
 /client/ios/xtool/
 /client/ios/.bsp/
 /client/android/.bsp/
+/protocol/conformance/.cache/
+/protocol/conformance/rust/target/
+/protocol/conformance/swift/.build/
+/protocol/conformance/swift/.swiftpm/
+/protocol/conformance/generated/jvm-classes/
+/protocol/conformance/generated/java/
+**/__pycache__/
+*.pyc

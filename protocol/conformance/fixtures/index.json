@@ -1,0 +1,66 @@
+[
+  {
+    "id": "version",
+    "type": "vista.v1.ProtocolVersion"
+  },
+  {
+    "id": "optional-zero",
+    "type": "vista.v1.VistaError"
+  },
+  {
+    "id": "grant-approved",
+    "type": "vista.v1.PermissionGrant"
+  },
+  {
+    "id": "grant-revoked",
+    "type": "vista.v1.PermissionUpdate"
+  },
+  {
+    "id": "catalog",
+    "type": "vista.v1.ControlEnvelope"
+  },
+  {
+    "id": "picker",
+    "type": "vista.v1.CaptureSelection"
+  },
+  {
+    "id": "verified-binding",
+    "type": "vista.v1.CaptureSelection"
+  },
+  {
+    "id": "enroll",
+    "type": "vista.v1.BootstrapEnvelope"
+  },
+  {
+    "id": "certificate",
+    "type": "vista.v1.PairingResult"
+  },
+  {
+    "id": "lease",
+    "type": "vista.v1.LeaseResult"
+  },
+  {
+    "id": "action",
+    "type": "vista.v1.ControlEnvelope"
+  },
+  {
+    "id": "input",
+    "type": "vista.v1.InputEnvelope"
+  },
+  {
+    "id": "required-feature",
+    "type": "vista.v1.ControlHello"
+  },
+  {
+    "id": "unknown-enum",
+    "type": "vista.v1.PermissionGrant"
+  },
+  {
+    "id": "enum-zero",
+    "type": "vista.v1.PermissionGrant"
+  },
+  {
+    "id": "missing-domain",
+    "type": "vista.v1.LeaseRequest"
+  }
+]

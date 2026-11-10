@@ -1,0 +1,12 @@
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # Preserve the reviewed candidate's enum names; changing them alters SDK APIs.
+    - ENUM_VALUE_PREFIX
+breaking:
+  use:
+    - FILE
