@@ -11,6 +11,7 @@ pub mod catalog_wire;
 pub mod control_dispatch;
 pub mod control_lease;
 pub mod decoder_sync;
+pub mod desktop_probe;
 pub mod host_service;
 pub mod input_inject;
 pub mod keyframe_control;

@@ -15,6 +15,10 @@ fn usage() {
     eprintln!(
         "       vista-host actions --window ID [--allow-window-actions] [--allow-desktop-actions] [--allow-clipboard] [--json]"
     );
+    eprintln!("       vista-host desktop-probe [--json] (passive metadata only)");
+    eprintln!(
+        "       vista-host desktop-probe-watch [--json] (re-probe on changes; Ctrl-C to stop)"
+    );
     eprintln!("       vista-host capture-consent --confirm [--json]");
     eprintln!("       vista-host capture-frame --confirm [--json]");
     eprintln!("       vista-host capture-burst --confirm [--json]");
@@ -80,6 +84,30 @@ fn run() -> Result<(), NiriError> {
                 return Err(NiriError::Unavailable(
                     "Niri compositor is not responding".into(),
                 ));
+            }
+        }
+        [command]
+            if command.as_str() == "desktop-probe" || command.as_str() == "desktop-probe-watch" =>
+        {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let watch = command.as_str() == "desktop-probe-watch";
+            let mut tracker = vista_host::desktop_probe::ProbeTracker::default();
+            loop {
+                let observation = runtime.block_on(vista_host::desktop_probe::observe());
+                if let Some(snapshot) = tracker.update(observation) {
+                    if json {
+                        println!("{}", serde_json::to_string(&snapshot)?);
+                    } else {
+                        println!("{}", serde_json::to_string_pretty(&snapshot)?);
+                    }
+                    io::stdout().flush()?;
+                }
+                if !watch {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
             }
         }
         [command] if command.as_str() == "capabilities" => {
