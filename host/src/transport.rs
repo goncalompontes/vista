@@ -355,6 +355,8 @@ impl CatalogSetup {
             generation: setup.generation.clone(),
             revision: setup.revision,
             entries: setup.entries.clone(),
+            workspaces: Vec::new(),
+            output: None,
         };
         probe
             .validate()
@@ -371,6 +373,8 @@ impl CatalogSetup {
             generation: self.generation.clone(),
             revision: self.revision,
             entries: self.entries.clone(),
+            workspaces: Vec::new(),
+            output: None,
         }
     }
 }

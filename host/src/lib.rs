@@ -11,9 +11,12 @@ pub mod catalog_wire;
 pub mod control_dispatch;
 pub mod control_lease;
 pub mod decoder_sync;
+pub mod host_service;
+pub mod input_inject;
 pub mod keyframe_control;
 pub mod lifecycle;
 pub mod live;
+pub mod live_media;
 pub mod media;
 pub mod media_stream;
 pub mod media_transport;
@@ -81,6 +84,46 @@ pub struct Window {
     pub is_urgent: bool,
 }
 
+/// Stable fields of Niri's workspace listing. A workspace is the compositor's
+/// virtual desktop; `idx` is the user-facing reference accepted by
+/// `niri msg action focus-workspace`.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Workspace {
+    pub id: u64,
+    pub idx: u8,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub output: String,
+    #[serde(default)]
+    pub is_urgent: bool,
+    #[serde(default)]
+    pub is_active: bool,
+    #[serde(default)]
+    pub is_focused: bool,
+    #[serde(default)]
+    pub active_window_id: Option<u64>,
+}
+
+/// Logical geometry of one connected output. Niri reports physical mode
+/// dimensions separately; capture and pointer coordinates use logical pixels.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct LogicalOutput {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale: f64,
+    #[serde(default)]
+    pub transform: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct OutputInfo {
+    pub name: String,
+    #[serde(default)]
+    pub logical: Option<LogicalOutput>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct DoctorReport {
     pub niri_binary: String,
@@ -141,6 +184,50 @@ impl<T: NiriTransport> Niri<T> {
 
     pub fn window(&self, id: u64) -> Result<Option<Window>, NiriError> {
         Ok(self.windows()?.into_iter().find(|window| window.id == id))
+    }
+
+    pub fn workspaces(&self) -> Result<Vec<Workspace>, NiriError> {
+        let response = self.transport.request("workspaces")?;
+        let mut workspaces: Vec<Workspace> = serde_json::from_str(&response)?;
+        workspaces.sort_by_key(|workspace| (workspace.output.clone(), workspace.idx));
+        Ok(workspaces)
+    }
+
+    pub fn workspace(&self, id: u64) -> Result<Option<Workspace>, NiriError> {
+        Ok(self
+            .workspaces()?
+            .into_iter()
+            .find(|workspace| workspace.id == id))
+    }
+
+    /// Returns outputs in stable name order. Niri's JSON is an object keyed by
+    /// connector name; disabled outputs have no logical geometry.
+    pub fn outputs(&self) -> Result<Vec<OutputInfo>, NiriError> {
+        let response = self.transport.request("outputs")?;
+        let mut outputs: Vec<OutputInfo> =
+            serde_json::from_str::<std::collections::BTreeMap<String, OutputInfo>>(&response)?
+                .into_values()
+                .collect();
+        outputs.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(outputs)
+    }
+
+    /// The output that receives new windows. Falls back to the only enabled
+    /// output when Niri does not report a focused one.
+    pub fn focused_output(&self) -> Result<Option<OutputInfo>, NiriError> {
+        let fallback = |niri: &Self| {
+            Ok(niri
+                .outputs()?
+                .into_iter()
+                .find(|output| output.logical.is_some()))
+        };
+        match self.transport.request("focused-output") {
+            Ok(response) => match serde_json::from_str::<OutputInfo>(&response) {
+                Ok(output) if output.logical.is_some() => Ok(Some(output)),
+                _ => fallback(self),
+            },
+            Err(_) => fallback(self),
+        }
     }
 
     pub fn doctor(&self) -> DoctorReport {

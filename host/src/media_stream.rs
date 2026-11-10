@@ -141,7 +141,7 @@ fn read_plain(stream: &mut TcpStream) -> Result<Envelope, String> {
     Envelope::decode(&framed).map_err(|error| format!("control decode: {error}"))
 }
 
-fn host_handshake(
+pub(crate) fn host_handshake(
     stream: &mut TcpStream,
     host: &mut HostSession,
     now_secs: u64,
@@ -169,7 +169,7 @@ fn host_handshake(
     Ok((keys, session_id))
 }
 
-fn client_handshake(
+pub(crate) fn client_handshake(
     stream: &mut TcpStream,
     secret: PairingSecret,
 ) -> Result<(ClientSession, SessionKeys, String), String> {

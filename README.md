@@ -6,9 +6,27 @@ Inspired by [Sill](https://github.com/Saffsanity/sill); not a fork or a drop-in 
 
 ## Status
 
-**Milestone 0 — live Linux host discovery.** The Rust host CLI discovers running Niri windows by ID, emits an incremental event stream for the window catalog, and probes the desktop ScreenCast portal without requesting capture. The iOS/iPadOS SwiftUI shell is now in `client/`, and its `VistaCore` package implements and tests the v1 control protocol, pairing crypto and encrypted record layer; the app can pair with a host and open an authenticated control session and render a bounded live window catalog. A VideoToolbox-backed stream view and Annex-B/keyframe gate exist, with a synthetic local encode→decode self-test; live host media is not connected to the client yet. Vista now has an interactively verified live pixel-capture path: on 2026-11-09 an explicitly consented Niri window was captured through the ScreenCast portal, encoded with NVENC and bounded in memory (29/29 frames at 1280×720, p50/p95 capture-to-encode 0.83/1.74 ms, one requested keyframe produced a second IDR); see [capture verification](docs/capture-verification.md). It does **not** yet have network video streaming, a remote client, or isolated application sessions. The opt-in `capture-h264 --confirm` diagnostic now wires a portal-approved window to PipeWire, bounded RGBA handling and an in-memory H.264 encoder, but requires manual desktop approval to verify the actual live path. `capture-h264 --confirm --window ID` additionally watches the explicit Niri target, and a deterministic `WindowLifecycle` guard (`lifecycle-test --json`) maps window removal, portal closure, permission revocation, compositor restart and resize to safe flush/termination decisions. The bounded run is configurable (`--seconds 1..120`, up to 3600 frames), reports capture-to-encode p50/p95 latency and keyframe counts, and can request a keyframe at an input frame (`--keyframe-at`) to exercise IDR recovery. Hardware verification is recorded in [capture verification](docs/capture-verification.md). An opt-in `capture-consent` diagnostic requests a single-window ScreenCast selection and reports negotiated PipeWire nodes, then closes the session without accessing pixels. An opt-in `capture-output` diagnostic now captures the entire active output through grim/wlr-screencopy, encodes one real 1920x1080 frame with NVENC and decodes it, reporting only dimensions and byte counts; it is an explicit full-output fallback, not portal per-window capture, and persists no pixels. A separate opt-in `capture-frame` diagnostic now attempts to read exactly one selected window frame in memory through the portal-authorized PipeWire remote, returning only timing/size metadata. It has compiled but has not yet been verified against a manually approved desktop chooser. A `pipewire-loopback` diagnostic now creates a local synthetic PipeWire video node and reads it back through the same `pipewiresrc` caps and RGBA bound checks used by capture, without requesting portal consent; one run delivered 5 frames / 1,152,000 bytes at 320x180. It does not prove per-window portal capture or real content. An in-memory `sync-test` now verifies the permission-scoped decode path end to end (synthetic RGBA → H.264 → decoder-resynchronization gate → ChaCha20-Poly1305 media record over a localhost TCP loopback → H.264 decoder) with one injected loss and reports traversal latency; after the loss the consumer requests a keyframe and the producer restarts the encoder to produce a fresh SPS/PPS IDR rather than waiting for a periodic GOP. It uses no desktop pixels or external network, and the record cipher is a fixed test key rather than a real pairing. See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).
+**Experimental end-to-end MVP, in progress.** The Rust host can pair with the
+iOS client, advertise Niri windows and virtual desktops, and send encrypted
+H.264 to the client's VideoToolbox view. On 2026-11-10, a vphone iOS VM paired
+with the host and displayed video for the active desktop and a virtual desktop
+in the same session. Selecting an individual window subsequently showed a
+stale frame; sustained playback and target switching still need investigation.
+Keyboard/pointer input and host actions are implemented but have not yet been
+verified end to end through the iOS UI. See the [test record and next steps](integrations/vista-computer-use/docs/END_TO_END.md#what-was-actually-exercised).
 
-A versioned, transport-neutral control protocol now exists in `host/src/protocol.rs`: bounded JSON frames, explicit version negotiation, a 256-bit out-of-band pairing secret with HMAC-SHA256 confirmation, HKDF session keys, strict sequencing, expiring offers and deny-by-default permissions. It is verified in memory by `protocol-test`, and a localhost-only TCP loopback (`protocol-loopback`) now pairs and exchanges ChaCha20-Poly1305-encrypted control records. A one-shot `protocol-serve` listener and `protocol-client` reference client can perform the same exchange across two processes; the listener refuses non-loopback addresses unless `--allow-remote` is explicit. The fixtures and contract are in [docs/protocol.md](docs/protocol.md). An authenticated `keyframe-control-test` now carries `KeyframeRequest` from a control client over the AEAD record transport and restarts the synthetic encoder (1 request, 1 restart, 10 decoded frames in one run). A two-process `media-stream` now runs the control pairing handshake first, derives the media key from the authenticated video-only session and decodes 12/12 synthetic H.264 access units (2,764,800 bytes) in the receiving process; wrong pairing secrets are rejected. The client also sends an authenticated `KeyframeRequest` over the reverse record direction, causing one encoder restart and a fresh IDR. The offer carries only the out-of-band test pairing secret, not the media key. Neither is a paired/client-authenticated production stream. A backend-agnostic capability/action/portable-input contract now exists in `host/src/capability.rs`: hosts advertise versioned capabilities, the registry revalidates target/revision/permissions before execution, and `capability-test --json` exercises denial, staleness, availability, duplicate, reconnect and held-input cleanup paths. `actions --window ID` builds a live read-only snapshot for an existing Niri window and reflects the requested grant state instead of inventing permission. A revocable per-session control lease (`host/src/control_lease.rs`) owns action/input grants, advances the grant epoch on revoke, rejects stale action/input requests and releases all held buttons/keys. A session-bound dispatcher (`host/src/control_dispatch.rs`) now attaches that lease to an authenticated `HostSession`, derives authorization from the lease, serves the grant-scoped capability snapshot and routes `action.invoke` to truthful `action.result` messages; wrong-session, revoked, stale-grant, wrong-target and malformed requests are rejected before the backend runs, and `control-dispatch-test --json` proves it through a real in-memory pairing. The one-shot `protocol-serve` listener now accepts an opt-in action policy (`--window ID` plus `--allow-*` grants) and dispatches one client action over the encrypted socket; `--fake-actions` is diagnostic-only and the default backend is Niri. A reusable media-record codec now carries one H.264 access unit per AEAD record with PTS, keyframe and discontinuity metadata (`host/src/media_transport.rs`); the two-process synthetic stream uses it end to end, a bounded queue drops the oldest unit and marks the next one discontinuous, and [ADR 0001](adr/0001-media-transport.md) records the custom-record decision plus rejected WebRTC/QUIC alternatives. There is still **no production listener, discovery, TLS/QUIC/WebRTC media transport, native input injection or iOS integration**.
+The experimental `vista-host serve` is single-client and has no TLS. Keep it
+on loopback and treat its pairing invite as a secret. Its live capture path
+uses `grim` to repeatedly capture the active output; selecting a window focuses
+and fullscreens it, so window capture is not isolated. Encoding prefers NVIDIA
+NVENC when available, but screen capture uses the compositor's GPU. Independent
+application sessions, audio, clipboard, production discovery, and robust
+reconnection are not yet implemented.
+
+Earlier capture and transport diagnostics are described in
+[capture verification](docs/capture-verification.md), [architecture](docs/architecture.md),
+and [the roadmap](docs/roadmap.md). They exercise different paths and do not
+by themselves establish the end-to-end MVP's reliability.
 
 ## Develop
 
@@ -76,10 +94,25 @@ cargo run -- capture-output --confirm --json
 
 Window IDs come from the active Niri session and can change after a window closes or the compositor restarts. `--json` supports programmatic consumers. When running through a tool or service with a sanitized environment, export `NIRI_SOCKET` from the active Niri session before invoking the host CLI.
 
+## Computer-use MCP for the vphone client
+
+The vphone/QEMU iOS-client workflow and the host service are also exposed
+through a reusable stdio MCP server at
+[`integrations/vista-computer-use`](integrations/vista-computer-use). It wraps
+the existing vphone-linux tools and `vista-host serve`/`live-client`, and ships
+Codex plugin/manifest examples plus an OpenCode config. Tools cover VM
+lifecycle/status, screenshots, accessibility trees, tap/swipe/key/text input,
+app install/launch/logs, guest networking, and the host reference-client path.
+See [computer-use.md](docs/computer-use.md) for the overview,
+[the package README](integrations/vista-computer-use/README.md) for setup, and
+[the end-to-end walkthrough](integrations/vista-computer-use/docs/END_TO_END.md)
+for pairing the real iOS client in the emulator.
+
 ## Repository layout
 
 - `host/`: Rust Linux host service foundation, including Niri window discovery, live window catalog events, and read-only portal capability diagnostics.
 - `client/`: native iOS/iPadOS SwiftUI shell, portable Swift models, control protocol/pairing, and an [interactive Arch browser preview](client/preview/README.md) for UI iteration; see [client setup](client/README.md).
+- `integrations/vista-computer-use/`: cross-client MCP server and Codex plugin for the vphone/QEMU iOS workflow and the Vista host service.
 - `docs/protocol.md`: versioned host/client control protocol, pairing, threat model and transport recommendation.
 - `docs/architecture.md`: host, transport, iOS, compositing and session architecture.
 - `docs/roadmap.md`: phased implementation and acceptance milestones.

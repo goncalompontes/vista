@@ -1,0 +1,17 @@
+# Direct Codex MCP configuration for the Vista computer-use server.
+# Replace the absolute paths with this checkout's location.
+# The server is also a plugin: see .codex-plugin/plugin.json and .mcp.json.
+
+[mcp_servers.vista_computer_use]
+command = "/home/pontes/lsm-workspace/vista/integrations/vista-computer-use/bin/vista-computer-use-mcp"
+args = []
+startup_timeout_sec = 20
+# IPA install and graceful VM shutdown can take longer than a normal tool call.
+tool_timeout_sec = 900
+
+[mcp_servers.vista_computer_use.env]
+VISTA_HOME = "/home/pontes/lsm-workspace/vista"
+VPHONE_HOME = "/home/pontes/lsm-workspace/vphone-linux"
+# Optional: pin a VM and CID when more than one VM exists.
+# VPHONE_VM = "vphone-iPhone17-3-2662"
+# VPHONE_CID = "3"

@@ -23,6 +23,9 @@ public enum ControlClientEvent: Equatable {
     case catalog(CatalogSnapshot)
     case capabilities(CapabilitySnapshot)
     case actionResult(ActionResultPayload)
+    case streamStarted(target: StreamTarget, width: UInt32, height: UInt32, geometryEpoch: UInt64)
+    case streamStopped(String)
+    case streamError(code: String, message: String)
     case message(String)
 }
 
@@ -50,6 +53,8 @@ public final class ControlClientConnection: @unchecked Sendable {
     public private(set) var policy: PermissionSet?
     public private(set) var catalog: CatalogSnapshot?
     public private(set) var capabilitySnapshot: CapabilitySnapshot?
+    public private(set) var lastStreamTarget: StreamTarget?
+    public private(set) var lastGeometryEpoch: UInt64?
     private var capabilitySession: CapabilitySession?
     public var onEvent: ((ControlClientEvent) -> Void)?
 
@@ -126,6 +131,51 @@ public final class ControlClientConnection: @unchecked Sendable {
 
     public func requestMediaKeyframe() {
         queue.async { self.mediaConnection?.requestKeyframe() }
+    }
+
+    public func selectStream(_ target: StreamTarget) {
+        queue.async {
+            guard let client = self.client, client.state == .active else { return }
+            do {
+                try self.send(client.selectStream(target))
+                self.catalog = nil
+            } catch {
+                self.fail(error)
+            }
+        }
+    }
+
+    public func stopStream() {
+        queue.async {
+            guard let client = self.client, client.state == .active else { return }
+            do {
+                try self.send(client.stopStream())
+            } catch {
+                self.fail(error)
+            }
+        }
+    }
+
+    public func requestCatalog() {
+        queue.async {
+            guard let client = self.client, client.state == .active else { return }
+            do {
+                try self.send(client.requestCatalog())
+            } catch {
+                self.fail(error)
+            }
+        }
+    }
+
+    public func sendInput(_ event: PortableInputEvent) {
+        queue.async {
+            guard let client = self.client, client.state == .active else { return }
+            do {
+                try self.send(client.sendInput(event))
+            } catch {
+                self.fail(error)
+            }
+        }
     }
 
     public func invokeAction(
@@ -300,6 +350,23 @@ public final class ControlClientConnection: @unchecked Sendable {
                 capabilitySession = session
             }
             onEvent?(.actionResult(result))
+        case let .streamStarted(_, target, width, height, geometryEpoch, _):
+            try client.acceptStreamEvent(envelope)
+            lastStreamTarget = target
+            lastGeometryEpoch = geometryEpoch
+            onEvent?(.streamStarted(
+                target: target,
+                width: width,
+                height: height,
+                geometryEpoch: geometryEpoch
+            ))
+        case let .streamStopped(_, reason):
+            try client.acceptStreamEvent(envelope)
+            lastStreamTarget = nil
+            onEvent?(.streamStopped(reason))
+        case let .streamError(_, code, message):
+            try client.acceptStreamEvent(envelope)
+            onEvent?(.streamError(code: code, message: message))
         default:
             onEvent?(.message(envelope.body.typeName))
         }

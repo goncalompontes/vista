@@ -13,11 +13,20 @@ final class LiveCatalogStore: ObservableObject {
     @Published private(set) var lastActionResult: ActionResultPayload?
     @Published private(set) var connectionState: ControlClientState = .idle
     @Published private(set) var mediaRecords: [H264AccessUnit] = []
+    @Published private(set) var mediaRecordSequence: UInt64 = 0
+    @Published private(set) var streamTarget: StreamTarget?
+    @Published private(set) var streamWidth: UInt32 = 0
+    @Published private(set) var streamHeight: UInt32 = 0
+    @Published private(set) var geometryEpoch: UInt64 = 1
+    @Published private(set) var streamMessage: String?
+    @Published private(set) var inputEnabled = false
 
     private var connection: ControlClientConnection?
 
     var isLive: Bool { snapshot != nil }
     var revision: UInt64 { snapshot?.revision ?? 0 }
+    var isStreaming: Bool { streamTarget != nil }
+    var output: CatalogOutput? { snapshot?.output }
 
     var applications: [RemoteApplication] {
         guard let snapshot else { return [] }
@@ -30,6 +39,10 @@ final class LiveCatalogStore: ObservableObject {
                 source: .existingWindow
             )
         }
+    }
+
+    var desktops: [CatalogWorkspace] {
+        snapshot?.workspaces ?? []
     }
 
     func setHost(_ name: String) {
@@ -52,6 +65,11 @@ final class LiveCatalogStore: ObservableObject {
         capabilities = nil
         lastActionResult = nil
         mediaRecords.removeAll()
+        streamTarget = nil
+        streamWidth = 0
+        streamHeight = 0
+        streamMessage = nil
+        inputEnabled = false
         connectionState = .closed
     }
 
@@ -70,15 +88,30 @@ final class LiveCatalogStore: ObservableObject {
                     self.pairingID = pairingID
                 case let .catalog(snapshot):
                     self.apply(snapshot, hostName: self.hostName)
+                case let .sessionOpened(permissions):
+                    self.inputEnabled = permissions.input
                 case let .capabilities(snapshot):
                     self.capabilities = snapshot
                 case let .actionResult(result):
                     self.lastActionResult = result
                 case let .mediaRecord(record):
                     self.mediaRecords.append(record)
+                    self.mediaRecordSequence &+= 1
                     if self.mediaRecords.count > 240 {
                         self.mediaRecords.removeFirst(self.mediaRecords.count - 240)
                     }
+                case let .streamStarted(target, width, height, geometryEpoch):
+                    self.streamTarget = target
+                    self.streamWidth = width
+                    self.streamHeight = height
+                    self.geometryEpoch = geometryEpoch
+                    self.streamMessage = nil
+                case let .streamStopped(reason):
+                    self.streamTarget = nil
+                    self.streamMessage = reason
+                case let .streamError(code, message):
+                    self.streamTarget = nil
+                    self.streamMessage = "\(code): \(message)"
                 default:
                     break
                 }
@@ -89,6 +122,25 @@ final class LiveCatalogStore: ObservableObject {
 
     func invokeAction(id: String, parameters: [String: JSONValue] = [:]) {
         connection?.invokeAction(id: id, parameters: parameters)
+    }
+
+    func selectStream(_ target: StreamTarget) {
+        mediaRecords.removeAll()
+        streamMessage = nil
+        connection?.selectStream(target)
+    }
+
+    func stopStream() {
+        connection?.stopStream()
+        streamTarget = nil
+    }
+
+    func sendInput(_ event: PortableInputEvent) {
+        connection?.sendInput(event)
+    }
+
+    func requestCatalog() {
+        connection?.requestCatalog()
     }
 
     func requestMediaKeyframe() {

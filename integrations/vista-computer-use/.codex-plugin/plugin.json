@@ -1,0 +1,37 @@
+{
+  "name": "vista-computer-use",
+  "version": "0.1.0",
+  "description": "Drive the Vista vphone/QEMU iOS emulator and the Vista host service through MCP tools.",
+  "author": {
+    "name": "Vista contributors"
+  },
+  "keywords": [
+    "vista",
+    "vphone",
+    "qemu",
+    "ios",
+    "emulator",
+    "computer-use",
+    "mcp",
+    "accessibility"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Vista Computer Use",
+    "shortDescription": "Control the vphone iOS emulator and Vista host",
+    "longDescription": "Inspect and drive a vphone/QEMU iOS guest with accessibility tools, screenshots and input, install and launch apps, read logs, and run the Vista host service with its reference client.",
+    "developerName": "Vista contributors",
+    "category": "Engineering",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Check the vphone VM, open the Vista client, and verify it can pair with the host service."
+    ],
+    "brandColor": "#339CFF",
+    "screenshots": []
+  }
+}

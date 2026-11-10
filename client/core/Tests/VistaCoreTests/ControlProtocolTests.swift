@@ -36,6 +36,21 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertEqual(versions, .current)
         XCTAssertEqual(clientID, "iphone-15")
 
+        guard case let .serverHello(_, _, _, _, _, _, policy) = fixtures.hostFrames[0].body,
+              case let .sessionOpen(_, requested) = fixtures.clientFrames[2].body
+        else {
+            return XCTFail("fixture handshake frames have unexpected types")
+        }
+        XCTAssertEqual(policy, .videoOnly)
+        XCTAssertEqual(requested, .videoOnly)
+
+        let encodedOpen = try JSONEncoder().encode(fixtures.clientFrames[2])
+        let openObject = try XCTUnwrap(JSONSerialization.jsonObject(with: encodedOpen) as? [String: Any])
+        let permissions = try XCTUnwrap(openObject["permissions"] as? [String: Bool])
+        XCTAssertEqual(permissions["video"], true)
+        XCTAssertEqual(permissions["input"], false)
+        XCTAssertNil(openObject["video"], "permissions belong in the nested wire object")
+
         for envelope in fixtures.clientFrames + fixtures.hostFrames {
             let framed = try ControlFraming.encode(envelope)
             XCTAssertEqual(try ControlFraming.decode(framed), envelope)

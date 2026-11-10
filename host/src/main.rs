@@ -46,6 +46,12 @@ fn usage() {
     eprintln!(
         "       vista-host protocol-client --connect ADDR --secret-hex HEX [--allow-input] [--action ID] [--json]"
     );
+    eprintln!(
+        "       vista-host serve --confirm [--listen ADDR] [--secret-hex HEX] [--allow-remote] [--allow-window-actions] [--allow-desktop-actions] [--allow-input] [--fps N] [--once] [--json]"
+    );
+    eprintln!(
+        "       vista-host live-client --connect ADDR --secret-hex HEX --target window:ID|workspace:ID|desktop [--frames N] [--h264 FILE] [--pointer X:Y] [--text TEXT] [--json]"
+    );
 }
 
 fn run() -> Result<(), NiriError> {
@@ -617,6 +623,14 @@ fn run() -> Result<(), NiriError> {
             let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
             protocol_client(&rest, json)?;
         }
+        [command, rest @ ..] if command.as_str() == "serve" => {
+            let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
+            serve_command(&rest, json)?;
+        }
+        [command, rest @ ..] if command.as_str() == "live-client" => {
+            let rest: Vec<&str> = rest.iter().map(|arg| arg.as_str()).collect();
+            live_client_command(&rest, json)?;
+        }
         [command] if command.as_str() == "control-dispatch-test" => {
             eprintln!(
                 "Running the session-bound capability/action dispatch diagnostic through an in-memory pairing; no network, capture or input injection."
@@ -1155,6 +1169,269 @@ fn protocol_client(args: &[&str], json: bool) -> Result<(), NiriError> {
             stats.encrypted_writes,
             stats.encrypted_reads
         );
+    }
+    Ok(())
+}
+
+fn serve_command(args: &[&str], json: bool) -> Result<(), NiriError> {
+    check_known_arguments(
+        args,
+        &["--listen", "--secret-hex", "--fps"],
+        &[
+            "--confirm",
+            "--allow-remote",
+            "--allow-window-actions",
+            "--allow-desktop-actions",
+            "--allow-clipboard",
+            "--allow-input",
+            "--once",
+            "--json",
+        ],
+    )?;
+    if !args.contains(&"--confirm") {
+        usage();
+        return Err(NiriError::InvalidArgument(
+            "serve requires explicit --confirm".into(),
+        ));
+    }
+    let listen = option(args, "--listen").unwrap_or("127.0.0.1:7443");
+    let address: SocketAddr = listen
+        .parse()
+        .map_err(|_| NiriError::InvalidArgument("--listen must be an IP:port address".into()))?;
+    let secret = match option(args, "--secret-hex") {
+        Some(value) => protocol::PairingSecret::from_hex(value).map_err(|error| {
+            NiriError::InvalidArgument(format!("invalid --secret-hex: {error}"))
+        })?,
+        None => protocol::PairingSecret::generate().map_err(|error| {
+            NiriError::Unavailable(format!("cannot generate pairing secret: {error}"))
+        })?,
+    };
+    let mut options = vista_host::host_service::ServeOptions::new(address);
+    options.secret = Some(secret);
+    options.allow_remote = args.contains(&"--allow-remote");
+    options.allow_input = args.contains(&"--allow-input");
+    options.grants = capability::ActionGrants {
+        window_actions: args.contains(&"--allow-window-actions"),
+        desktop_actions: args.contains(&"--allow-desktop-actions"),
+        clipboard: args.contains(&"--allow-clipboard"),
+    };
+    options.once = args.contains(&"--once");
+    if let Some(fps) = option(args, "--fps") {
+        options.fps = fps
+            .parse::<u32>()
+            .map_err(|_| NiriError::InvalidArgument("--fps must be an integer".into()))?;
+    }
+    let grants = options.grants;
+    let (service, invite) = vista_host::host_service::HostService::bind(options).map_err(|error| {
+        NiriError::Unavailable(format!("cannot start host service: {error}"))
+    })?;
+    if json {
+        println!("{}", serde_json::to_string(&invite)?);
+        io::stdout().flush()?;
+    } else {
+        println!("Vista host service listening on {}.", invite.address);
+        println!("Pairing secret: {}", invite.secret_hex);
+        println!(
+            "Input injection: {}; capture rate: {} fps.",
+            if invite.input { "enabled" } else { "disabled" },
+            invite.fps
+        );
+        println!(
+            "Grants: window actions={} desktop actions={} clipboard={}.",
+            grants.window_actions, grants.desktop_actions, grants.clipboard
+        );
+        println!(
+            "Streaming streams the selected window (fullscreened), virtual desktop, or active output."
+        );
+        io::stdout().flush()?;
+    }
+    service
+        .run()
+        .map_err(|error| NiriError::Unavailable(format!("host service failed: {error}")))
+}
+
+fn parse_stream_target(value: &str) -> Result<protocol::StreamTarget, NiriError> {
+    if value == "desktop" {
+        return Ok(protocol::StreamTarget::Desktop);
+    }
+    if let Some(id) = value.strip_prefix("window:") {
+        let id = id
+            .parse::<u64>()
+            .map_err(|_| NiriError::InvalidArgument("window id must be an integer".into()))?;
+        return Ok(protocol::StreamTarget::Window { id });
+    }
+    if let Some(id) = value.strip_prefix("workspace:") {
+        let id = id
+            .parse::<u64>()
+            .map_err(|_| NiriError::InvalidArgument("workspace id must be an integer".into()))?;
+        return Ok(protocol::StreamTarget::Workspace { id });
+    }
+    Err(NiriError::InvalidArgument(
+        "--target must be desktop, window:ID or workspace:ID".into(),
+    ))
+}
+
+fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
+    check_known_arguments(
+        args,
+        &["--connect", "--secret-hex", "--target", "--frames", "--h264", "--pointer", "--text"],
+        &["--json", "--allow-input"],
+    )?;
+    let connect = option(args, "--connect")
+        .ok_or_else(|| NiriError::InvalidArgument("live-client requires --connect".into()))?;
+    let address: SocketAddr = connect
+        .parse()
+        .map_err(|_| NiriError::InvalidArgument("--connect must be an IP:port address".into()))?;
+    let secret_hex = option(args, "--secret-hex").ok_or_else(|| {
+        NiriError::InvalidArgument("live-client requires --secret-hex".into())
+    })?;
+    let secret = protocol::PairingSecret::from_hex(secret_hex)
+        .map_err(|error| NiriError::InvalidArgument(format!("invalid --secret-hex: {error}")))?;
+    let target = parse_stream_target(
+        option(args, "--target")
+            .ok_or_else(|| NiriError::InvalidArgument("live-client requires --target".into()))?,
+    )?;
+    let frames = match option(args, "--frames") {
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| NiriError::InvalidArgument("--frames must be an integer".into()))?,
+        None => 60,
+    };
+    if frames == 0 {
+        return Err(NiriError::InvalidArgument("--frames must be positive".into()));
+    }
+    let h264_path = option(args, "--h264");
+    let allow_input = args.contains(&"--allow-input");
+    let permissions = protocol::PermissionSet {
+        video: true,
+        input: allow_input,
+        ..protocol::PermissionSet::default()
+    };
+    let mut client = vista_host::host_service::LiveClient::connect(
+        address,
+        secret.clone(),
+        permissions,
+        "vista-live-client",
+    )
+    .map_err(|error| NiriError::Unavailable(format!("live client: {error}")))?;
+    let media = client
+        .media
+        .clone()
+        .ok_or_else(|| NiriError::Unavailable("host did not announce a media endpoint".into()))?;
+    let (mut media_stream, keys, session_id) = vista_host::host_service::connect_media(
+        SocketAddr::new(address.ip(), media.port),
+        &secret,
+    )
+    .map_err(|error| NiriError::Unavailable(format!("media connect: {error}")))?;
+    let mut cipher = vista_host::media_transport::media_cipher(
+        keys.host_to_client(),
+        &session_id,
+        vista_host::transport::Direction::HostToClient,
+    )
+    .map_err(|error| NiriError::Unavailable(format!("media cipher: {error}")))?;
+    media_stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(50)))
+        .map_err(NiriError::Io)?;
+    client
+        .select(target)
+        .map_err(|error| NiriError::Unavailable(format!("stream select: {error}")))?;
+
+    let mut file = match h264_path {
+        Some(path) => Some(std::fs::File::create(path)?),
+        None => None,
+    };
+    let mut received = 0usize;
+    let mut bytes = 0usize;
+    let mut width = 0u32;
+    let mut height = 0u32;
+    let mut encoder = String::new();
+    let mut sent_input = false;
+    let started = std::time::Instant::now();
+    let deadline = started + std::time::Duration::from_secs(30);
+    while received < frames && std::time::Instant::now() < deadline {
+        match vista_host::host_service::read_media_record(&mut media_stream, &mut cipher) {
+            Ok(Some(record)) => {
+                received += 1;
+                bytes += record.bytes.len();
+                if let Some(file) = &mut file {
+                    file.write_all(&record.bytes)?;
+                }
+                if allow_input && !sent_input && received >= 2 {
+                    sent_input = true;
+                    let event = capability::InputEvent::PointerAbsolute {
+                        x: 0.5,
+                        y: 0.5,
+                        geometry_epoch: client
+                            .last_geometry_epoch
+                            .unwrap_or(1),
+                    };
+                    let _ = client.send_input(event);
+                    if let Some(text) = option(args, "--text") {
+                        let _ = client.send_input(capability::InputEvent::TextCommit {
+                            text: text.to_string(),
+                        });
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {}
+        }
+        // Poll the control channel for stream.started and errors.
+        if let Ok(Some(envelope)) = client.poll_control() {
+            match &envelope.body {
+                protocol::ControlMessage::StreamStarted {
+                    width: w,
+                    height: h,
+                    encoder: e,
+                    geometry_epoch,
+                    ..
+                } => {
+                    width = *w;
+                    height = *h;
+                    encoder = e.clone();
+                    client.last_geometry_epoch = Some(*geometry_epoch);
+                }
+                protocol::ControlMessage::StreamError { code, message, .. } => {
+                    eprintln!("stream error: {code}: {message}");
+                    break;
+                }
+                protocol::ControlMessage::StreamStopped { reason, .. } => {
+                    eprintln!("stream stopped: {reason}");
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+    client.close("live client complete");
+    let elapsed = started.elapsed();
+    let report = serde_json::json!({
+        "address": address.to_string(),
+        "target": target,
+        "frames": received,
+        "bytes": bytes,
+        "width": width,
+        "height": height,
+        "encoder": encoder,
+        "elapsed_ms": elapsed.as_millis(),
+        "h264": h264_path,
+        "verified": received > 0,
+    });
+    if json {
+        println!("{}", serde_json::to_string(&report)?);
+    } else {
+        println!(
+            "Received {} H.264 access units ({} bytes) at {}x{} with {} in {} ms.",
+            received,
+            bytes,
+            width,
+            height,
+            if encoder.is_empty() { "unknown encoder" } else { &encoder },
+            elapsed.as_millis()
+        );
+        if let Some(path) = h264_path {
+            println!("Annex-B access units written to {path} (not a container).");
+        }
     }
     Ok(())
 }

@@ -246,7 +246,91 @@ pub enum ControlMessage {
         generation: String,
         revision: u64,
         entries: Vec<crate::catalog_wire::CatalogEntry>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        workspaces: Vec<crate::catalog_wire::CatalogWorkspace>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<crate::catalog_wire::CatalogOutput>,
     },
+    /// Ask the host for a fresh catalog (for example after a window closes).
+    #[serde(rename = "catalog.request")]
+    CatalogRequest {
+        v: u16,
+        session_id: String,
+    },
+    /// Select the window, virtual desktop, or active output that should be
+    /// captured and encoded. Selection is separate from capability grants.
+    #[serde(rename = "stream.select")]
+    StreamSelect {
+        v: u16,
+        session_id: String,
+        target: StreamTarget,
+    },
+    #[serde(rename = "stream.stop")]
+    StreamStop {
+        v: u16,
+        session_id: String,
+    },
+    /// The producer has emitted its first encoded frame at the reported size.
+    #[serde(rename = "stream.started")]
+    StreamStarted {
+        v: u16,
+        session_id: String,
+        target: StreamTarget,
+        width: u32,
+        height: u32,
+        geometry_epoch: u64,
+        encoder: String,
+    },
+    #[serde(rename = "stream.stopped")]
+    StreamStopped {
+        v: u16,
+        session_id: String,
+        reason: String,
+    },
+    #[serde(rename = "stream.error")]
+    StreamError {
+        v: u16,
+        session_id: String,
+        code: String,
+        message: String,
+    },
+    /// Portable pointer/keyboard/text input, authorized by the session input
+    /// permission and the currently selected stream geometry.
+    #[serde(rename = "input.event")]
+    InputEvent {
+        v: u16,
+        session_id: String,
+        event: crate::capability::InputEvent,
+    },
+}
+
+/// One selectable stream source. `Desktop` means "whatever the focused output
+/// currently shows"; `Workspace` is a Niri virtual desktop and `Window` is a
+/// single Niri window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StreamTarget {
+    Desktop,
+    Workspace { id: u64 },
+    Window { id: u64 },
+}
+
+impl StreamTarget {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Workspace { .. } => "workspace",
+            Self::Window { .. } => "window",
+        }
+    }
+
+    pub fn identifier(&self) -> String {
+        match self {
+            Self::Desktop => "desktop".into(),
+            Self::Workspace { id } => format!("ws{id}"),
+            Self::Window { id } => format!("w{id}"),
+        }
+    }
 }
 
 impl ControlMessage {
@@ -269,6 +353,13 @@ impl ControlMessage {
             Self::ActionInvoke { .. } => "action.invoke",
             Self::ActionResult { .. } => "action.result",
             Self::CatalogSnapshot { .. } => "catalog.snapshot",
+            Self::CatalogRequest { .. } => "catalog.request",
+            Self::StreamSelect { .. } => "stream.select",
+            Self::StreamStop { .. } => "stream.stop",
+            Self::StreamStarted { .. } => "stream.started",
+            Self::StreamStopped { .. } => "stream.stopped",
+            Self::StreamError { .. } => "stream.error",
+            Self::InputEvent { .. } => "input.event",
         }
     }
 }
@@ -442,6 +533,8 @@ impl From<crate::catalog_wire::CatalogSnapshot> for ControlMessage {
             generation: snapshot.generation,
             revision: snapshot.revision,
             entries: snapshot.entries,
+            workspaces: snapshot.workspaces,
+            output: snapshot.output,
         }
     }
 }
@@ -457,6 +550,8 @@ impl TryFrom<&ControlMessage> for crate::catalog_wire::CatalogSnapshot {
             generation,
             revision,
             entries,
+            workspaces,
+            output,
         } = message
         else {
             return Err(crate::catalog_wire::CatalogWireError::new(
@@ -471,6 +566,8 @@ impl TryFrom<&ControlMessage> for crate::catalog_wire::CatalogSnapshot {
             generation: generation.clone(),
             revision: *revision,
             entries: entries.clone(),
+            workspaces: workspaces.clone(),
+            output: output.clone(),
         };
         snapshot
             .validate()
@@ -984,6 +1081,19 @@ impl HostSession {
         }))
     }
 
+    /// Emit an authenticated, sequence-correct message to the active client.
+    /// Callers are responsible for only sending messages valid in the current
+    /// session; this is used by the live service for stream and catalog events.
+    pub fn emit(&mut self, body: ControlMessage) -> Result<Envelope, ProtocolError> {
+        if self.state != HostState::Active {
+            return Err(ProtocolError::InvalidTransition {
+                expected: "an active session",
+                actual: "another state",
+            });
+        }
+        Ok(self.reply(body))
+    }
+
     fn reply(&mut self, body: ControlMessage) -> Envelope {
         let envelope = Envelope::new(self.next_host_seq, body);
         self.next_host_seq = self.next_host_seq.wrapping_add(1);
@@ -1140,6 +1250,25 @@ impl HostSession {
                 };
                 let reply = control.handle(&envelope.body, now_secs);
                 Ok(reply.map(|body| self.reply(body)))
+            }
+            (
+                HostState::Active,
+                ControlMessage::StreamSelect { session_id, .. }
+                | ControlMessage::StreamStop { session_id, .. }
+                | ControlMessage::CatalogRequest { session_id, .. }
+                | ControlMessage::InputEvent { session_id, .. },
+            ) => {
+                if self.session_id.as_deref() != Some(session_id.as_str()) {
+                    return Err(ProtocolError::SessionMismatch);
+                }
+                if !self.permissions.video {
+                    return Ok(Some(self.reply(ControlMessage::Error {
+                        code: "permission_denied".into(),
+                        message: "the session does not grant video".into(),
+                    })));
+                }
+                // The live service performs capture, injection and catalog work.
+                Ok(None)
             }
             (HostState::Active, ControlMessage::Ping { nonce }) => {
                 Ok(Some(self.reply(ControlMessage::Pong { nonce: *nonce })))
@@ -1472,6 +1601,137 @@ impl ClientSession {
         );
         self.next_client_seq = self.next_client_seq.wrapping_add(1);
         Ok(envelope)
+    }
+
+    pub fn select_stream(&mut self, target: StreamTarget) -> Result<Envelope, ProtocolError> {
+        self.require_active()?;
+        let session_id = self
+            .session_id
+            .clone()
+            .ok_or(ProtocolError::SessionMismatch)?;
+        let envelope = Envelope::new(
+            self.next_client_seq,
+            ControlMessage::StreamSelect {
+                v: 1,
+                session_id,
+                target,
+            },
+        );
+        self.next_client_seq = self.next_client_seq.wrapping_add(1);
+        Ok(envelope)
+    }
+
+    pub fn stop_stream(&mut self) -> Result<Envelope, ProtocolError> {
+        self.require_active()?;
+        let session_id = self
+            .session_id
+            .clone()
+            .ok_or(ProtocolError::SessionMismatch)?;
+        let envelope = Envelope::new(
+            self.next_client_seq,
+            ControlMessage::StreamStop {
+                v: 1,
+                session_id,
+            },
+        );
+        self.next_client_seq = self.next_client_seq.wrapping_add(1);
+        Ok(envelope)
+    }
+
+    pub fn request_catalog(&mut self) -> Result<Envelope, ProtocolError> {
+        self.require_active()?;
+        let session_id = self
+            .session_id
+            .clone()
+            .ok_or(ProtocolError::SessionMismatch)?;
+        let envelope = Envelope::new(
+            self.next_client_seq,
+            ControlMessage::CatalogRequest {
+                v: 1,
+                session_id,
+            },
+        );
+        self.next_client_seq = self.next_client_seq.wrapping_add(1);
+        Ok(envelope)
+    }
+
+    pub fn input_event(
+        &mut self,
+        event: crate::capability::InputEvent,
+    ) -> Result<Envelope, ProtocolError> {
+        self.require_active()?;
+        let session_id = self
+            .session_id
+            .clone()
+            .ok_or(ProtocolError::SessionMismatch)?;
+        let envelope = Envelope::new(
+            self.next_client_seq,
+            ControlMessage::InputEvent {
+                v: 1,
+                session_id,
+                event,
+            },
+        );
+        self.next_client_seq = self.next_client_seq.wrapping_add(1);
+        Ok(envelope)
+    }
+
+    /// Consume `stream.started`, returning target, dimensions, geometry epoch
+    /// and encoder name. The geometry epoch changes on every new stream start
+    /// so input can never be applied with stale coordinates.
+    pub fn accept_stream_started(
+        &mut self,
+        envelope: &Envelope,
+    ) -> Result<(StreamTarget, u32, u32, u64, String), ProtocolError> {
+        self.check_host_sequence(envelope)?;
+        match &envelope.body {
+            ControlMessage::StreamStarted {
+                target,
+                width,
+                height,
+                geometry_epoch,
+                encoder,
+                ..
+            } => Ok((*target, *width, *height, *geometry_epoch, encoder.clone())),
+            other => Err(ProtocolError::InvalidTransition {
+                expected: "stream.started",
+                actual: other.name(),
+            }),
+        }
+    }
+
+    pub fn accept_stream_stopped(&mut self, envelope: &Envelope) -> Result<String, ProtocolError> {
+        self.check_host_sequence(envelope)?;
+        match &envelope.body {
+            ControlMessage::StreamStopped { reason, .. } => Ok(reason.clone()),
+            other => Err(ProtocolError::InvalidTransition {
+                expected: "stream.stopped",
+                actual: other.name(),
+            }),
+        }
+    }
+
+    pub fn accept_stream_error(&mut self, envelope: &Envelope) -> Result<String, ProtocolError> {
+        self.check_host_sequence(envelope)?;
+        match &envelope.body {
+            ControlMessage::StreamError { code, message, .. } => {
+                Ok(format!("{code}: {message}"))
+            }
+            other => Err(ProtocolError::InvalidTransition {
+                expected: "stream.error",
+                actual: other.name(),
+            }),
+        }
+    }
+
+    fn require_active(&self) -> Result<(), ProtocolError> {
+        if self.state != ClientState::Active {
+            return Err(ProtocolError::InvalidTransition {
+                expected: "an active session",
+                actual: "another state",
+            });
+        }
+        Ok(())
     }
 
     pub fn ping(&mut self, nonce: u64) -> Result<Envelope, ProtocolError> {

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "vista_computer_use": {
+      "type": "local",
+      "command": [
+        "/home/pontes/lsm-workspace/vista/integrations/vista-computer-use/bin/vista-computer-use-mcp"
+      ],
+      "enabled": true,
+      "environment": {
+        "VISTA_HOME": "/home/pontes/lsm-workspace/vista",
+        "VPHONE_HOME": "/home/pontes/lsm-workspace/vphone-linux"
+      }
+    }
+  }
+}
