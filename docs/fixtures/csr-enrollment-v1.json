@@ -1,0 +1,60 @@
+{
+  "profile": "vista-client-v1",
+  "protocol": "TLS 1.3",
+  "key": {
+    "algorithm": "EC",
+    "curve": "P-256",
+    "purpose": [
+      "digitalSignature"
+    ],
+    "private_key_export": false
+  },
+  "csr": {
+    "encoding": "DER",
+    "format": "PKCS#10",
+    "signature_required": true,
+    "subject_common_name": "opaque-client-id",
+    "requested_extensions_are_untrusted": true
+  },
+  "issued_certificate": {
+    "version": 3,
+    "basic_constraints": {
+      "ca": false
+    },
+    "key_usage": [
+      "digitalSignature"
+    ],
+    "extended_key_usage": [
+      "clientAuth"
+    ],
+    "subject_public_key_must_equal_csr": true,
+    "issuer_must_be_host_ca": true,
+    "private_key_transmitted": false
+  },
+  "server_acceptance": {
+    "tls_minimum": "1.3",
+    "early_data": false,
+    "require_client_certificate": true,
+    "verify_chain": true,
+    "verify_expiry": true,
+    "verify_client_auth_eku": true,
+    "require_explicit_trust_record": true,
+    "reject_revoked_identity": true
+  },
+  "negative_cases": [
+    "malformed_csr",
+    "unsigned_or_invalid_csr_signature",
+    "wrong_curve",
+    "csr_requests_ca_true",
+    "csr_requests_server_auth",
+    "csr_subject_key_mismatch",
+    "untrusted_issuer",
+    "expired_certificate",
+    "missing_client_auth_eku",
+    "unknown_trust_record",
+    "revoked_client",
+    "wrong_host_spki_pin",
+    "tls_early_data",
+    "public_certificate_without_private_key"
+  ]
+}
