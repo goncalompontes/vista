@@ -3,6 +3,7 @@ import SwiftUI
 struct WelcomeView: View {
     let onExplore: () -> Void
     var onPair: () -> Void = {}
+    var onStatePreview: () -> Void = {}
 
     var body: some View {
         GeometryReader { geometry in
@@ -58,6 +59,10 @@ struct WelcomeView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(VistaPalette.accent)
+
+                    Button("Explore fake-host states", action: onStatePreview)
+                        .buttonStyle(.bordered)
+                        .tint(VistaPalette.accent)
 
                     #if !SKIP
                     Button(action: onPair) {

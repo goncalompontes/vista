@@ -13,6 +13,7 @@ struct VistaApp: App {
 private struct VistaRootView: View {
     @State private var showingDemo = false
     @State private var showingPairing = false
+    @State private var showingStatePreview = false
     @StateObject private var catalog = LiveCatalogStore()
 
     var body: some View {
@@ -44,9 +45,13 @@ private struct VistaRootView: View {
             } else {
                 WelcomeView(
                     onExplore: { showingDemo = true },
-                    onPair: { showingPairing = true }
+                    onPair: { showingPairing = true },
+                    onStatePreview: { showingStatePreview = true }
                 )
             }
+        }
+        .sheet(isPresented: $showingStatePreview) {
+            ClientStatePreviewView()
         }
         .sheet(isPresented: $showingPairing) {
             PairingView(store: catalog)
