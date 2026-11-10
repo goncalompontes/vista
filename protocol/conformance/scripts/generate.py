@@ -64,6 +64,8 @@ def main():
         assert revision == LOCK["swift-protobuf"]["revision"]
         run("swift", "build", "-c", "release", "--product", "protoc-gen-swift", cwd=plugin)
         output = HERE / "swift/Sources/VistaCandidate"
+        # protoc does not create the --swift_out directory on a fresh checkout.
+        output.mkdir(parents=True, exist_ok=True)
         run(*common, f"--plugin=protoc-gen-swift={plugin / '.build/release/protoc-gen-swift'}",
             f"--swift_out={output}", "--swift_opt=Visibility=Public,FileNaming=DropPath", schema)
 

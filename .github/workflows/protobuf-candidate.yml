@@ -46,5 +46,11 @@ jobs:
         run: |
           python3 protocol/conformance/scripts/tools.py
           python3 protocol/conformance/scripts/generate.py --swift
+      - name: Verify Swift generation is deterministic
+        run: |
+          shasum -a 256 protocol/conformance/swift/Sources/VistaCandidate/*.swift > "$RUNNER_TEMP/swift-generated-before.sha256"
+          python3 protocol/conformance/scripts/generate.py --swift
+          shasum -a 256 protocol/conformance/swift/Sources/VistaCandidate/*.swift > "$RUNNER_TEMP/swift-generated-after.sha256"
+          diff -u "$RUNNER_TEMP/swift-generated-before.sha256" "$RUNNER_TEMP/swift-generated-after.sha256"
       - name: Test Swift protobuf fixtures
         run: swift test --package-path protocol/conformance/swift
