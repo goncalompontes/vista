@@ -519,7 +519,6 @@ fn serve_client(
                     }
                     ControlMessage::InputEvent { event, .. } => {
                         if let Some(injector) = &injector {
-                            input_events = input_events.saturating_add(1);
                             let result = apply_live_input(
                                 host.control_mut(),
                                 &event,
@@ -527,8 +526,9 @@ fn serve_client(
                                 |effects| injector.apply_effects(effects),
                                 |effects| injector.release_effects(effects),
                             );
-                            if let Err(error) = result {
-                                eprintln!("vista-host: input rejected: {error}");
+                            match result {
+                                Ok(()) => input_events = input_events.saturating_add(1),
+                                Err(error) => eprintln!("vista-host: input rejected: {error}"),
                             }
                         } else {
                             let envelope = host
@@ -574,6 +574,8 @@ fn serve_client(
                         height: geometry.height,
                         geometry_epoch: geometry.epoch,
                         encoder,
+                        capture_scope: Some("display".into()),
+                        input_scope: Some("shared_desktop".into()),
                     })
                     .map_err(|error| format!("stream started: {error}"))?;
                 wire.write_envelope(&envelope)?;

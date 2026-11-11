@@ -487,3 +487,18 @@ Not implemented:
 
 Do not describe this as a secure remote-streaming implementation until those
 transport and client pieces exist and are verified end to end.
+
+### Additive v1 stream sharing scopes (Android usability milestone)
+
+`stream.started` may include `capture_scope` and `input_scope`. The current
+`serve` producer reports `capture_scope: "display"` and
+`input_scope: "shared_desktop"`, including when selecting a window: selection
+fullscreens a window but capture/input still affect the display/shared seat.
+These fields describe actual sharing, not the selected target's kind or name.
+Older hosts omit them; missing or unrecognized values mean **unknown**, never
+private-window capture/control. Clients must keep that uncertainty visible.
+
+Both fields are optional strings for backward-compatible v1 decoding. The
+shared `docs/fixtures/stream-scopes-v1.json` is exercised by Rust, Swift and
+Android tests. These messages announce encoded geometry; only native decoder
+render callbacks establish live playback.

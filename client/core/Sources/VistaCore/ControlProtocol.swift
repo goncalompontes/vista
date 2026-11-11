@@ -561,7 +561,9 @@ public enum ControlMessage: Equatable, Sendable {
         width: UInt32,
         height: UInt32,
         geometryEpoch: UInt64,
-        encoder: String
+        encoder: String,
+        captureScope: String? = nil,
+        inputScope: String? = nil
     )
     case streamStopped(sessionID: String, reason: String)
     case streamError(sessionID: String, code: String, message: String)
@@ -802,7 +804,9 @@ extension ControlMessage {
                 width: width,
                 height: height,
                 geometryEpoch: geometryEpoch,
-                encoder: try string("encoder")
+                encoder: try string("encoder"),
+                captureScope: try c.decodeIfPresent(String.self, forKey: AnyCodingKey("capture_scope")),
+                inputScope: try c.decodeIfPresent(String.self, forKey: AnyCodingKey("input_scope"))
             )
         case "stream.stopped":
             self = .streamStopped(sessionID: try string("session_id"), reason: try string("reason"))
@@ -882,7 +886,7 @@ extension ControlMessage {
         case let .streamStop(sessionID):
             try container.encode(1, forKey: AnyCodingKey("v"))
             try container.encode(sessionID, forKey: AnyCodingKey("session_id"))
-        case let .streamStarted(sessionID, target, width, height, geometryEpoch, encoder):
+        case let .streamStarted(sessionID, target, width, height, geometryEpoch, encoder, captureScope, inputScope):
             try container.encode(1, forKey: AnyCodingKey("v"))
             try container.encode(sessionID, forKey: AnyCodingKey("session_id"))
             try container.encode(target, forKey: AnyCodingKey("target"))
@@ -890,6 +894,8 @@ extension ControlMessage {
             try container.encode(height, forKey: AnyCodingKey("height"))
             try container.encode(geometryEpoch, forKey: AnyCodingKey("geometry_epoch"))
             try container.encode(encoder, forKey: AnyCodingKey("encoder"))
+            try container.encodeIfPresent(captureScope, forKey: AnyCodingKey("capture_scope"))
+            try container.encodeIfPresent(inputScope, forKey: AnyCodingKey("input_scope"))
         case let .streamStopped(sessionID, reason):
             try container.encode(1, forKey: AnyCodingKey("v"))
             try container.encode(sessionID, forKey: AnyCodingKey("session_id"))

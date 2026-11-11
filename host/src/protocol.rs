@@ -280,6 +280,11 @@ pub enum ControlMessage {
         height: u32,
         geometry_epoch: u64,
         encoder: String,
+        /// Actual sharing scopes. Absent on older v1 hosts means unknown.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capture_scope: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_scope: Option<String>,
     },
     #[serde(rename = "stream.stopped")]
     StreamStopped {
@@ -2073,6 +2078,31 @@ pub fn diagnostic() -> Result<ProtocolReport, ProtocolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_scope_extension_preserves_legacy_v1_and_reports_actual_scope() {
+        let fixtures: serde_json::Value =
+            serde_json::from_str(include_str!("../../docs/fixtures/stream-scopes-v1.json"))
+                .unwrap();
+        for (name, expected_capture, expected_input) in [
+            ("legacy", None, None),
+            ("scoped", Some("display"), Some("shared_desktop")),
+        ] {
+            let envelope: Envelope = serde_json::from_value(fixtures[name].clone()).unwrap();
+            match &envelope.body {
+                ControlMessage::StreamStarted {
+                    capture_scope,
+                    input_scope,
+                    ..
+                } => {
+                    assert_eq!(capture_scope.as_deref(), expected_capture);
+                    assert_eq!(input_scope.as_deref(), expected_input);
+                }
+                _ => panic!("expected stream.started"),
+            }
+            assert_eq!(serde_json::to_value(envelope).unwrap(), fixtures[name]);
+        }
+    }
 
     fn paired() -> (HostSession, ClientSession, ProtocolVersion) {
         let secret = PairingSecret::from_bytes([7u8; SECRET_BYTES]);

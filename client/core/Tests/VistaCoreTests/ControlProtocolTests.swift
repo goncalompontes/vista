@@ -24,6 +24,23 @@ final class ControlProtocolTests: XCTestCase {
             .deletingLastPathComponent() // repository root
     }
 
+    func testSharedStreamScopesPreserveLegacyAndCurrentFrames() throws {
+        let url = repositoryRoot().appendingPathComponent("docs/fixtures/stream-scopes-v1.json")
+        let fixtures = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        for name in ["legacy", "scoped"] {
+            let data = try JSONSerialization.data(withJSONObject: fixtures[name]!)
+            let envelope = try JSONDecoder().decode(Envelope.self, from: data)
+            guard case let .streamStarted(_, _, _, _, _, _, capture, input) = envelope.body else {
+                return XCTFail("expected stream.started")
+            }
+            XCTAssertEqual(capture, name == "legacy" ? nil : "display")
+            XCTAssertEqual(input, name == "legacy" ? nil : "shared_desktop")
+            let encoded = try JSONEncoder().encode(envelope)
+            XCTAssertEqual(try JSONSerialization.jsonObject(with: encoded) as! NSDictionary,
+                           fixtures[name] as! NSDictionary)
+        }
+    }
+
     func testSharedProtocolFixturesDecodeAndRoundTrip() throws {
         let url = repositoryRoot().appendingPathComponent("docs/fixtures/protocol-v1.json")
         let fixtures = try JSONDecoder().decode(Fixtures.self, from: Data(contentsOf: url))

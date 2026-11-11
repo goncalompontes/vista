@@ -1,0 +1,33 @@
+{
+  "note": "Additive v1 stream scopes. Missing/unknown values do not imply private capture or input.",
+  "legacy": {
+    "seq": 5,
+    "type": "stream.started",
+    "v": 1,
+    "session_id": "404142434445464748494a4b4c4d4e4f",
+    "target": {
+      "kind": "window",
+      "id": 5
+    },
+    "width": 1920,
+    "height": 1080,
+    "geometry_epoch": 3,
+    "encoder": "x264enc"
+  },
+  "scoped": {
+    "seq": 5,
+    "type": "stream.started",
+    "v": 1,
+    "session_id": "404142434445464748494a4b4c4d4e4f",
+    "target": {
+      "kind": "window",
+      "id": 5
+    },
+    "width": 1920,
+    "height": 1080,
+    "geometry_epoch": 3,
+    "encoder": "x264enc",
+    "capture_scope": "display",
+    "input_scope": "shared_desktop"
+  }
+}
