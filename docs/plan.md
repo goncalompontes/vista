@@ -41,7 +41,10 @@ Implemented and tested in the repository:
   bounded drop-discontinuity queue (ADR 0001).
 - iOS/iPadOS Swift control transport, pairing crypto, Keychain-backed pairing
   sheet, live window catalog and VideoToolbox stream view with a synthetic
-  self-test; Android Skip APK preview.
+  self-test.
+- Native Android Kotlin/Compose control client: pairing, AEAD session, catalog,
+  capability snapshot and semantic actions, with a shared-vector wire test and
+  a clean Gradle/CI build. Media and input are not wired.
 
 Demonstrated on 2026-11-11 with the Rust reference client (see
 [e2e-verification.md](e2e-verification.md)):
@@ -57,8 +60,8 @@ Not yet demonstrated anywhere:
   lease and the injector (see [input-verification.md](input-verification.md)),
   but no action, click, drag or text commit has been exercised end to end.
 - Native-client playback beyond the 2026-11-10 iOS run recorded in the README:
-  no sustained iOS session, no Android runtime playback, no decoder recovery
-  evidence from a real device.
+  no sustained iOS session, no Android runtime playback (the Android client is
+  control-only today), no decoder recovery evidence from a real device.
 - Indefinite streaming, interactive revocation, congestion control, packet-loss
   recovery, discovery, or isolated application sessions.
 - Independent application sessions.
@@ -191,18 +194,20 @@ client cannot see or affect the host desktop.
 | Encoder diagnostics + reference-client end-to-end evidence | #97 | merged |
 | Reference-client completion and clean-shutdown semantics (real desktop, workspace and window targets) | #98 | merged |
 | Skip-transpilable framing and view defaults | #99 | merged |
-| Input path: pointer event through the transport, lease and injector | this change | open |
+| Input path: pointer event through the transport, lease and injector | #100 | merged |
+| Native Android client: retire Skip, Gradle/CI build, shared-vector wire tests | this change | open |
 
 ### Next steps
 
 1. Prove one action and one input event reaching a real desktop through the
    transport, with an opt-in run that states exactly what moved.
-2. Reconcile the Android client with the shared core: the `VistaCore` sources are
-   `#if !SKIP`-guarded, so the Skip build transpiles the UI but not the protocol
-   types, and a clean transpile currently needs a documented path fix.
-3. Add incremental catalog refresh and reconnect/backpressure handling.
-4. Make the Android build a CI gate once the transpile is reproducible.
-5. Continue M3 input/keyboard/audio/clipboard, then M4 independent sessions and
+2. Wire Android live media: consume `media_offer`, run the media handshake,
+   decrypt bounded records and decode H.264 with `MediaCodec` into a stream
+   view. The Android client is the MVP verification platform while iOS stays
+   unverified.
+3. Add Android touch/keyboard input, then incremental catalog refresh and
+   reconnect/backpressure handling on both clients.
+4. Continue M3 input/keyboard/audio/clipboard, then M4 independent sessions and
    M5 packaging/reliability.
 
 ## Definition of done (every increment)

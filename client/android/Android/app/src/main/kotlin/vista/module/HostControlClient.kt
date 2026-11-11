@@ -8,14 +8,7 @@ import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.security.SecureRandom
 import java.util.concurrent.Executors
-import javax.crypto.Cipher
-import javax.crypto.Mac
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 data class HostWindow(val id: Long, val title: String, val appId: String?)
 data class HostAction(val id: String, val label: String, val selectable: Boolean, val reason: String?)
@@ -51,9 +44,9 @@ class HostControlClient {
         executor.execute {
             try {
                 publish("Connecting…")
-                val secret = hex(secretHex)
-                require(secret.size == 32) { "Pairing secret must be 64 hex characters" }
-                val clientNonce = randomHex(32)
+                val secret = VistaWire.hexToBytes(secretHex)
+                require(secret.size == VistaWire.PAIRING_SECRET_BYTES) { "Pairing secret must be 64 hex characters" }
+                val clientNonce = VistaWire.randomHex(VistaWire.PAIRING_SECRET_BYTES)
                 val sock = Socket()
                 sock.connect(InetSocketAddress(host, port), 12_000)
                 socket = sock
@@ -74,27 +67,39 @@ class HostControlClient {
                 val hostNonce = hello.getString("host_nonce")
                 val pairingId = hello.getString("pairing_id")
                 val policy = hello.getJSONObject("policy")
-                val policyBits = permissionBits(policy)
-                val transcript = "vista-pairing-v1\nversion=1.0\nclient_id=vista-android\nclient_nonce=$clientNonce\nhost_id=$hostId\nhost_nonce=$hostNonce\npairing_id=$pairingId\npolicy=$policyBits\n"
+                val policyBits = VistaWire.permissionBits(
+                    policy.optBoolean("video"),
+                    policy.optBoolean("audio"),
+                    policy.optBoolean("input"),
+                    policy.optBoolean("clipboard"),
+                )
+                val transcript = VistaWire.transcript(
+                    version = VistaWire.PROTOCOL_VERSION,
+                    clientID = "vista-android",
+                    clientNonce = clientNonce,
+                    hostID = hostId,
+                    hostNonce = hostNonce,
+                    pairingID = pairingId,
+                    policyBits = policyBits,
+                )
                 sendPlain(
                     JSONObject()
                         .put("seq", clientSequence++)
                         .put("type", "pairing_request")
                         .put("pairing_id", pairingId)
-                        .put("tag", hmac(secret, "client-confirm\n".toByteArray() + transcript.toByteArray()).toHex())
+                        .put("tag", VistaWire.clientTag(secret, transcript).toHex())
                 )
                 val accepted = readPlain()
                 checkHostSequence(accepted)
                 check(accepted.getString("type") == "pairing_accepted") { "pairing rejected" }
                 sessionId = accepted.getString("session_id")
-                val hostTag = hmac(
-                    secret,
-                    "host-confirm\n".toByteArray() + transcript.toByteArray() + "\nsession=".toByteArray() + sessionId.toByteArray(),
-                )
-                check(hostTag.contentEquals(hex(accepted.getString("tag")))) { "host authentication failed" }
-                val keys = deriveKeys(secret, pairingId, transcript.toByteArray(), sessionId)
-                sessionKeyOut = keys.copyOfRange(0, 32)
-                sessionKeyIn = keys.copyOfRange(32, 64)
+                val expectedHostTag = VistaWire.hostTag(secret, transcript, sessionId)
+                check(expectedHostTag.contentEquals(VistaWire.hexToBytes(accepted.getString("tag")))) {
+                    "host authentication failed"
+                }
+                val keys = VistaWire.deriveSessionKeys(secret, pairingId, transcript, sessionId)
+                sessionKeyOut = keys.copyOfRange(0, VistaWire.SESSION_KEY_BYTES)
+                sessionKeyIn = keys.copyOfRange(VistaWire.SESSION_KEY_BYTES, VistaWire.SESSION_KEY_BYTES * 2)
                 sendSecure(
                     JSONObject()
                         .put("seq", clientSequence++)
@@ -180,49 +185,38 @@ class HostControlClient {
     private fun readPlain(): JSONObject = JSONObject(String(readFrame(), Charsets.UTF_8))
 
     private fun sendSecure(message: JSONObject) {
-        val plaintext = message.toString().toByteArray()
-        val nonce = nonce(outCounter++)
-        val cipher = Cipher.getInstance("ChaCha20-Poly1305")
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(sessionKeyOut, "ChaCha20"), IvParameterSpec(nonce))
-        cipher.updateAAD(aad(1))
-        writeFrame(cipher.doFinal(plaintext))
+        val sealed = VistaWire.seal(
+            key = sessionKeyOut,
+            sessionID = sessionId,
+            direction = VistaWire.DIRECTION_CLIENT_TO_HOST,
+            counter = outCounter++,
+            plaintext = message.toString().toByteArray(),
+        )
+        writeFrame(sealed)
     }
 
     private fun readSecure(): JSONObject {
-        val sealed = readFrame()
-        val nonce = nonce(inCounter++)
-        val cipher = Cipher.getInstance("ChaCha20-Poly1305")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(sessionKeyIn, "ChaCha20"), IvParameterSpec(nonce))
-        cipher.updateAAD(aad(2))
-        return JSONObject(String(cipher.doFinal(sealed), Charsets.UTF_8)).also { checkHostSequence(it) }
+        val plaintext = VistaWire.open(
+            key = sessionKeyIn,
+            sessionID = sessionId,
+            direction = VistaWire.DIRECTION_HOST_TO_CLIENT,
+            counter = inCounter++,
+            sealed = readFrame(),
+        )
+        return JSONObject(String(plaintext, Charsets.UTF_8)).also { checkHostSequence(it) }
     }
 
     private fun writeFrame(bytes: ByteArray) {
-        val out = output ?: error("not connected")
-        out.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(bytes.size).array())
-        out.write(bytes)
-        out.flush()
+        VistaWire.writeFrame(output ?: error("not connected"), bytes)
     }
 
-    private fun readFrame(): ByteArray {
-        val source = input ?: error("not connected")
-        val header = source.readNBytes(4)
-        check(header.size == 4) { "host closed the connection" }
-        val length = ByteBuffer.wrap(header).order(ByteOrder.BIG_ENDIAN).int
-        check(length in 1..(64 * 1024 + 16)) { "invalid frame length" }
-        val bytes = source.readNBytes(length)
-        check(bytes.size == length) { "truncated frame" }
-        return bytes
-    }
+    private fun readFrame(): ByteArray = VistaWire.readFrame(input ?: error("not connected"))
 
     private fun checkHostSequence(message: JSONObject) {
         val received = message.getLong("seq")
         check(received == hostSequence) { "host sequence expected $hostSequence, got $received" }
         hostSequence++
     }
-
-    private fun aad(direction: Int): ByteArray = "vista-record-v1".toByteArray() + sessionId.toByteArray() + direction.toByte()
-    private fun nonce(counter: Long): ByteArray = ByteArray(12).also { ByteBuffer.wrap(it, 4, 8).order(ByteOrder.BIG_ENDIAN).putLong(counter) }
 
     private fun parseCatalog(entries: JSONArray): List<HostWindow> = buildList {
         for (index in 0 until entries.length()) {
@@ -246,24 +240,8 @@ class HostControlClient {
     private fun closeSocket() { try { socket?.close() } catch (_: Throwable) {} ; socket = null; input = null; output = null }
 
     companion object {
-        private fun version() = JSONObject().put("major", 1).put("minor", 0)
-        private fun permissionBits(policy: JSONObject): Int = (if (policy.optBoolean("video")) 1 else 0) or (if (policy.optBoolean("audio")) 2 else 0) or (if (policy.optBoolean("input")) 4 else 0) or (if (policy.optBoolean("clipboard")) 8 else 0)
-        private fun randomHex(bytes: Int): String = ByteArray(bytes).also { SecureRandom().nextBytes(it) }.toHex()
-        private fun hex(value: String): ByteArray { check(value.length % 2 == 0) ; return value.chunked(2).map { it.toInt(16).toByte() }.toByteArray() }
-        private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
-        private fun hmac(key: ByteArray, value: ByteArray): ByteArray = Mac.getInstance("HmacSHA256").run { init(SecretKeySpec(key, algorithm)); doFinal(value) }
-        private fun deriveKeys(secret: ByteArray, pairingId: String, transcript: ByteArray, sessionId: String): ByteArray {
-            val salt = hmac(pairingId.toByteArray(), secret)
-            val info = "vista-session-v1\n$pairingId\n$sessionId\n".toByteArray() + transcript
-            var previous = ByteArray(0)
-            val output = ByteArray(64)
-            var offset = 0
-            for (counter in 1..2) {
-                previous = hmac(salt, previous + info + counter.toByte())
-                previous.copyInto(output, offset)
-                offset += previous.size
-            }
-            return output
-        }
+        private fun version() = JSONObject()
+            .put("major", VistaWire.PROTOCOL_MAJOR)
+            .put("minor", VistaWire.PROTOCOL_MINOR)
     }
 }
