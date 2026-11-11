@@ -142,6 +142,242 @@ public struct CatalogEntry: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// One Niri workspace (virtual desktop) reported in the host catalog.
+public struct CatalogWorkspace: Codable, Equatable, Sendable, Identifiable {
+    public let workspaceID: UInt64
+    public let idx: UInt8
+    public let name: String?
+    public let output: String
+    public let isActive: Bool
+    public let isFocused: Bool
+    public let activeWindowID: UInt64?
+
+    public var id: String { "ws\(workspaceID)" }
+
+    public init(
+        workspaceID: UInt64,
+        idx: UInt8,
+        name: String? = nil,
+        output: String,
+        isActive: Bool = false,
+        isFocused: Bool = false,
+        activeWindowID: UInt64? = nil
+    ) {
+        self.workspaceID = workspaceID
+        self.idx = idx
+        self.name = name
+        self.output = output
+        self.isActive = isActive
+        self.isFocused = isFocused
+        self.activeWindowID = activeWindowID
+    }
+
+    public var displayName: String {
+        if let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return name
+        }
+        return "Desktop \(idx)"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case workspaceID = "workspace_id"
+        case idx
+        case name
+        case output
+        case isActive = "is_active"
+        case isFocused = "is_focused"
+        case activeWindowID = "active_window_id"
+    }
+}
+
+/// Logical geometry of the output used for the selected stream.
+public struct CatalogOutput: Codable, Equatable, Sendable {
+    public let name: String
+    public let width: UInt32
+    public let height: UInt32
+    public let scale: Double
+
+    public init(name: String, width: UInt32, height: UInt32, scale: Double) {
+        self.name = name
+        self.width = width
+        self.height = height
+        self.scale = scale
+    }
+}
+
+/// One selectable capture source. `workspace` is a Niri virtual desktop.
+public enum StreamTarget: Codable, Equatable, Hashable, Sendable {
+    case desktop
+    case workspace(id: UInt64)
+    case window(id: UInt64)
+
+    public var kind: String {
+        switch self {
+        case .desktop: "desktop"
+        case .workspace: "workspace"
+        case .window: "window"
+        }
+    }
+
+    public var id: String {
+        switch self {
+        case .desktop: "desktop"
+        case let .workspace(id): "ws\(id)"
+        case let .window(id): "w\(id)"
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: AnyCodingKey.self)
+        let kind = try container.decode(String.self, forKey: AnyCodingKey("kind"))
+        switch kind {
+        case "desktop":
+            self = .desktop
+        case "workspace":
+            self = .workspace(id: try container.decode(UInt64.self, forKey: AnyCodingKey("id")))
+        case "window":
+            self = .window(id: try container.decode(UInt64.self, forKey: AnyCodingKey("id")))
+        default:
+            throw WireError.invalidField("stream target kind")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: AnyCodingKey.self)
+        try container.encode(kind, forKey: AnyCodingKey("kind"))
+        switch self {
+        case .desktop:
+            break
+        case let .workspace(id), let .window(id):
+            try container.encode(id, forKey: AnyCodingKey("id"))
+        }
+    }
+}
+
+public enum PointerButtonValue: String, Codable, Equatable, Sendable {
+    case primary, secondary, middle, back, forward
+}
+
+public enum ScrollUnitValue: String, Codable, Equatable, Sendable {
+    case pixel, line
+}
+
+public enum ScrollPhaseValue: String, Codable, Equatable, Sendable {
+    case begin, update, end, cancel
+}
+
+/// Portable input mirrors `host/src/capability.rs::InputEvent`.
+public enum PortableInputEvent: Codable, Equatable, Sendable {
+    case pointerAbsolute(x: Double, y: Double, geometryEpoch: UInt64)
+    case pointerRelative(dx: Double, dy: Double)
+    case pointerButton(button: PointerButtonValue, pressed: Bool)
+    case scroll(
+        dx: Double,
+        dy: Double,
+        unit: ScrollUnitValue,
+        phase: ScrollPhaseValue,
+        momentum: Bool,
+        anchorX: Double,
+        anchorY: Double
+    )
+    case keyPhysical(usage: UInt16, pressed: Bool, isRepeat: Bool)
+    case textCommit(text: String)
+    case cancel
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case x, y, dx, dy, button, pressed, unit, phase, momentum
+        case anchorX = "anchor_x"
+        case anchorY = "anchor_y"
+        case usage, `repeat`
+        case text
+        case geometryEpoch = "geometry_epoch"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(String.self, forKey: .type)
+        switch type {
+        case "pointer.absolute":
+            self = .pointerAbsolute(
+                x: try container.decode(Double.self, forKey: .x),
+                y: try container.decode(Double.self, forKey: .y),
+                geometryEpoch: try container.decode(UInt64.self, forKey: .geometryEpoch)
+            )
+        case "pointer.relative":
+            self = .pointerRelative(
+                dx: try container.decode(Double.self, forKey: .dx),
+                dy: try container.decode(Double.self, forKey: .dy)
+            )
+        case "pointer.button":
+            self = .pointerButton(
+                button: try container.decode(PointerButtonValue.self, forKey: .button),
+                pressed: try container.decode(Bool.self, forKey: .pressed)
+            )
+        case "scroll":
+            self = .scroll(
+                dx: try container.decode(Double.self, forKey: .dx),
+                dy: try container.decode(Double.self, forKey: .dy),
+                unit: try container.decode(ScrollUnitValue.self, forKey: .unit),
+                phase: try container.decode(ScrollPhaseValue.self, forKey: .phase),
+                momentum: try container.decodeIfPresent(Bool.self, forKey: .momentum) ?? false,
+                anchorX: try container.decode(Double.self, forKey: .anchorX),
+                anchorY: try container.decode(Double.self, forKey: .anchorY)
+            )
+        case "key.physical":
+            self = .keyPhysical(
+                usage: try container.decode(UInt16.self, forKey: .usage),
+                pressed: try container.decode(Bool.self, forKey: .pressed),
+                isRepeat: try container.decodeIfPresent(Bool.self, forKey: .`repeat`) ?? false
+            )
+        case "text.commit":
+            self = .textCommit(text: try container.decode(String.self, forKey: .text))
+        case "input.cancel":
+            self = .cancel
+        default:
+            throw WireError.invalidField("input event type")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .pointerAbsolute(x, y, geometryEpoch):
+            try container.encode("pointer.absolute", forKey: .type)
+            try container.encode(x, forKey: .x)
+            try container.encode(y, forKey: .y)
+            try container.encode(geometryEpoch, forKey: .geometryEpoch)
+        case let .pointerRelative(dx, dy):
+            try container.encode("pointer.relative", forKey: .type)
+            try container.encode(dx, forKey: .dx)
+            try container.encode(dy, forKey: .dy)
+        case let .pointerButton(button, pressed):
+            try container.encode("pointer.button", forKey: .type)
+            try container.encode(button, forKey: .button)
+            try container.encode(pressed, forKey: .pressed)
+        case let .scroll(dx, dy, unit, phase, momentum, anchorX, anchorY):
+            try container.encode("scroll", forKey: .type)
+            try container.encode(dx, forKey: .dx)
+            try container.encode(dy, forKey: .dy)
+            try container.encode(unit, forKey: .unit)
+            try container.encode(phase, forKey: .phase)
+            try container.encode(momentum, forKey: .momentum)
+            try container.encode(anchorX, forKey: .anchorX)
+            try container.encode(anchorY, forKey: .anchorY)
+        case let .keyPhysical(usage, pressed, isRepeat):
+            try container.encode("key.physical", forKey: .type)
+            try container.encode(usage, forKey: .usage)
+            try container.encode(pressed, forKey: .pressed)
+            try container.encode(isRepeat, forKey: .`repeat`)
+        case let .textCommit(text):
+            try container.encode("text.commit", forKey: .type)
+            try container.encode(text, forKey: .text)
+        case .cancel:
+            try container.encode("input.cancel", forKey: .type)
+        }
+    }
+}
+
 public struct CatalogSnapshot: Codable, Equatable, Sendable {
     public static let maxEntries = 256
     public static let maxTitleBytes = 256
@@ -154,6 +390,8 @@ public struct CatalogSnapshot: Codable, Equatable, Sendable {
     public let generation: String
     public let revision: UInt64
     public let entries: [CatalogEntry]
+    public let workspaces: [CatalogWorkspace]
+    public let output: CatalogOutput?
 
     public init(
         v: UInt16 = 1,
@@ -162,7 +400,9 @@ public struct CatalogSnapshot: Codable, Equatable, Sendable {
         sessionID: String?,
         generation: String,
         revision: UInt64,
-        entries: [CatalogEntry]
+        entries: [CatalogEntry],
+        workspaces: [CatalogWorkspace] = [],
+        output: CatalogOutput? = nil
     ) throws {
         self.v = v
         self.messageType = messageType
@@ -171,6 +411,8 @@ public struct CatalogSnapshot: Codable, Equatable, Sendable {
         self.generation = generation
         self.revision = revision
         self.entries = entries
+        self.workspaces = workspaces
+        self.output = output
         try validate()
     }
 
@@ -187,8 +429,28 @@ public struct CatalogSnapshot: Codable, Equatable, Sendable {
         guard !generation.isEmpty, generation.utf8.count <= 256, revision > 0 else {
             throw WireError.invalidField("catalog header")
         }
-        guard entries.count <= Self.maxEntries else {
+        guard entries.count <= Self.maxEntries,
+              workspaces.count <= 64
+        else {
             throw WireError.invalidField("catalog entries")
+        }
+        if let output {
+            guard !output.name.isEmpty,
+                  output.width > 0, output.width <= 16_384,
+                  output.height > 0, output.height <= 16_384,
+                  output.scale.isFinite, output.scale > 0
+            else {
+                throw WireError.invalidField("catalog output")
+            }
+        }
+        var seenWorkspaces = Set<UInt64>()
+        for workspace in workspaces {
+            guard workspace.idx > 0,
+                  !workspace.output.isEmpty,
+                  seenWorkspaces.insert(workspace.workspaceID).inserted
+            else {
+                throw WireError.invalidField("catalog workspaces")
+            }
         }
         var seen = Set<UInt64>()
         for entry in entries {
@@ -216,6 +478,8 @@ public struct CatalogSnapshot: Codable, Equatable, Sendable {
         case generation
         case revision
         case entries
+        case workspaces
+        case output
     }
 
     init(from container: KeyedDecodingContainer<AnyCodingKey>) throws {
@@ -238,6 +502,14 @@ public struct CatalogSnapshot: Codable, Equatable, Sendable {
         self.generation = try string("generation")
         self.revision = revision
         self.entries = entries
+        self.workspaces = try container.decodeIfPresent(
+            [CatalogWorkspace].self,
+            forKey: AnyCodingKey("workspaces")
+        ) ?? []
+        self.output = try container.decodeIfPresent(
+            CatalogOutput.self,
+            forKey: AnyCodingKey("output")
+        )
         try validate()
     }
 
@@ -248,6 +520,10 @@ public struct CatalogSnapshot: Codable, Equatable, Sendable {
         try container.encode(generation, forKey: AnyCodingKey("generation"))
         try container.encode(revision, forKey: AnyCodingKey("revision"))
         try container.encode(entries, forKey: AnyCodingKey("entries"))
+        if !workspaces.isEmpty {
+            try container.encode(workspaces, forKey: AnyCodingKey("workspaces"))
+        }
+        try container.encodeIfPresent(output, forKey: AnyCodingKey("output"))
     }
 }
 
@@ -277,6 +553,20 @@ public enum ControlMessage: Equatable, Sendable {
     case actionInvoke(ActionRequestPayload)
     case actionResult(ActionResultPayload)
     case catalogSnapshot(CatalogSnapshot)
+    case catalogRequest(sessionID: String)
+    case streamSelect(sessionID: String, target: StreamTarget)
+    case streamStop(sessionID: String)
+    case streamStarted(
+        sessionID: String,
+        target: StreamTarget,
+        width: UInt32,
+        height: UInt32,
+        geometryEpoch: UInt64,
+        encoder: String
+    )
+    case streamStopped(sessionID: String, reason: String)
+    case streamError(sessionID: String, code: String, message: String)
+    case inputEvent(sessionID: String, event: PortableInputEvent)
 
     public var typeName: String {
         switch self {
@@ -297,6 +587,13 @@ public enum ControlMessage: Equatable, Sendable {
         case .actionInvoke: "action.invoke"
         case .actionResult: "action.result"
         case .catalogSnapshot: "catalog.snapshot"
+        case .catalogRequest: "catalog.request"
+        case .streamSelect: "stream.select"
+        case .streamStop: "stream.stop"
+        case .streamStarted: "stream.started"
+        case .streamStopped: "stream.stopped"
+        case .streamError: "stream.error"
+        case .inputEvent: "input.event"
         }
     }
 }
@@ -356,16 +653,11 @@ extension ControlMessage {
             }
             return value
         }
-        func boolOrFalse(_ key: String) throws -> Bool {
-            try c.decodeIfPresent(Bool.self, forKey: AnyCodingKey(key)) ?? false
-        }
-        func permissions() throws -> PermissionSet {
-            PermissionSet(
-                video: try boolOrFalse("video"),
-                audio: try boolOrFalse("audio"),
-                input: try boolOrFalse("input"),
-                clipboard: try boolOrFalse("clipboard")
-            )
+        func permissions(_ key: String) throws -> PermissionSet {
+            guard let value = try c.decodeIfPresent(PermissionSet.self, forKey: AnyCodingKey(key)) else {
+                throw WireError.invalidField(key)
+            }
+            return value
         }
 
         switch type {
@@ -391,7 +683,7 @@ extension ControlMessage {
                 hostNonce: try string("host_nonce"),
                 pairingID: try string("pairing_id"),
                 expiresAt: expiresAt,
-                policy: try permissions()
+                policy: try permissions("policy")
             )
         case "pairing_request":
             self = .pairingRequest(pairingID: try string("pairing_id"), tag: try string("tag"))
@@ -399,14 +691,14 @@ extension ControlMessage {
             self = .pairingAccepted(
                 tag: try string("tag"),
                 sessionID: try string("session_id"),
-                permissions: try permissions()
+                permissions: try permissions("permissions")
             )
         case "pairing_rejected":
             self = .pairingRejected(reason: try string("reason"))
         case "session_open":
-            self = .sessionOpen(sessionID: try string("session_id"), permissions: try permissions())
+            self = .sessionOpen(sessionID: try string("session_id"), permissions: try permissions("permissions"))
         case "session_opened":
-            self = .sessionOpened(sessionID: try string("session_id"), permissions: try permissions())
+            self = .sessionOpened(sessionID: try string("session_id"), permissions: try permissions("permissions"))
         case "media.offer":
             guard let version = try c.decodeIfPresent(UInt16.self, forKey: AnyCodingKey("v")),
                   let port = try c.decodeIfPresent(UInt16.self, forKey: AnyCodingKey("port")),
@@ -490,19 +782,48 @@ extension ControlMessage {
             ))
         case "catalog.snapshot":
             self = .catalogSnapshot(try CatalogSnapshot(from: c))
+        case "catalog.request":
+            self = .catalogRequest(sessionID: try string("session_id"))
+        case "stream.select":
+            guard let target = try c.decodeIfPresent(StreamTarget.self, forKey: AnyCodingKey("target")) else {
+                throw WireError.invalidField("stream target")
+            }
+            self = .streamSelect(sessionID: try string("session_id"), target: target)
+        case "stream.stop":
+            self = .streamStop(sessionID: try string("session_id"))
+        case "stream.started":
+            guard let target = try c.decodeIfPresent(StreamTarget.self, forKey: AnyCodingKey("target")),
+                  let width = try c.decodeIfPresent(UInt32.self, forKey: AnyCodingKey("width")),
+                  let height = try c.decodeIfPresent(UInt32.self, forKey: AnyCodingKey("height")),
+                  let geometryEpoch = try c.decodeIfPresent(UInt64.self, forKey: AnyCodingKey("geometry_epoch"))
+            else { throw WireError.invalidField("stream.started") }
+            self = .streamStarted(
+                sessionID: try string("session_id"),
+                target: target,
+                width: width,
+                height: height,
+                geometryEpoch: geometryEpoch,
+                encoder: try string("encoder")
+            )
+        case "stream.stopped":
+            self = .streamStopped(sessionID: try string("session_id"), reason: try string("reason"))
+        case "stream.error":
+            self = .streamError(
+                sessionID: try string("session_id"),
+                code: try string("code"),
+                message: try string("message")
+            )
+        case "input.event":
+            guard let event = try c.decodeIfPresent(PortableInputEvent.self, forKey: AnyCodingKey("event")) else {
+                throw WireError.invalidField("input event")
+            }
+            self = .inputEvent(sessionID: try string("session_id"), event: event)
         default:
             throw WireError.unknownMessageType(type)
         }
     }
 
     func encodePayload(to container: inout KeyedEncodingContainer<AnyCodingKey>) throws {
-        func encodePermissions(_ permissions: PermissionSet) throws {
-            try container.encode(permissions.video, forKey: AnyCodingKey("video"))
-            try container.encode(permissions.audio, forKey: AnyCodingKey("audio"))
-            try container.encode(permissions.input, forKey: AnyCodingKey("input"))
-            try container.encode(permissions.clipboard, forKey: AnyCodingKey("clipboard"))
-        }
-
         try container.encode(typeName, forKey: AnyCodingKey("type"))
         switch self {
         case let .clientHello(versions, clientID, clientNonce):
@@ -516,19 +837,19 @@ extension ControlMessage {
             try container.encode(hostNonce, forKey: AnyCodingKey("host_nonce"))
             try container.encode(pairingID, forKey: AnyCodingKey("pairing_id"))
             try container.encode(expiresAt, forKey: AnyCodingKey("expires_at"))
-            try encodePermissions(policy)
+            try container.encode(policy, forKey: AnyCodingKey("policy"))
         case let .pairingRequest(pairingID, tag):
             try container.encode(pairingID, forKey: AnyCodingKey("pairing_id"))
             try container.encode(tag, forKey: AnyCodingKey("tag"))
         case let .pairingAccepted(tag, sessionID, permissions):
             try container.encode(tag, forKey: AnyCodingKey("tag"))
             try container.encode(sessionID, forKey: AnyCodingKey("session_id"))
-            try encodePermissions(permissions)
+            try container.encode(permissions, forKey: AnyCodingKey("permissions"))
         case let .pairingRejected(reason):
             try container.encode(reason, forKey: AnyCodingKey("reason"))
         case let .sessionOpen(sessionID, permissions), let .sessionOpened(sessionID, permissions):
             try container.encode(sessionID, forKey: AnyCodingKey("session_id"))
-            try encodePermissions(permissions)
+            try container.encode(permissions, forKey: AnyCodingKey("permissions"))
         case let .mediaOffer(offer):
             try container.encode(offer.v, forKey: AnyCodingKey("v"))
             try container.encode(offer.port, forKey: AnyCodingKey("port"))
@@ -552,12 +873,43 @@ extension ControlMessage {
             try result.encodePayload(to: &container)
         case let .catalogSnapshot(snapshot):
             try snapshot.encodePayload(to: &container)
+        case let .catalogRequest(sessionID):
+            try container.encode(1, forKey: AnyCodingKey("v"))
+            try container.encode(sessionID, forKey: AnyCodingKey("session_id"))
+        case let .streamSelect(sessionID, target):
+            try container.encode(1, forKey: AnyCodingKey("v"))
+            try container.encode(sessionID, forKey: AnyCodingKey("session_id"))
+            try container.encode(target, forKey: AnyCodingKey("target"))
+        case let .streamStop(sessionID):
+            try container.encode(1, forKey: AnyCodingKey("v"))
+            try container.encode(sessionID, forKey: AnyCodingKey("session_id"))
+        case let .streamStarted(sessionID, target, width, height, geometryEpoch, encoder):
+            try container.encode(1, forKey: AnyCodingKey("v"))
+            try container.encode(sessionID, forKey: AnyCodingKey("session_id"))
+            try container.encode(target, forKey: AnyCodingKey("target"))
+            try container.encode(width, forKey: AnyCodingKey("width"))
+            try container.encode(height, forKey: AnyCodingKey("height"))
+            try container.encode(geometryEpoch, forKey: AnyCodingKey("geometry_epoch"))
+            try container.encode(encoder, forKey: AnyCodingKey("encoder"))
+        case let .streamStopped(sessionID, reason):
+            try container.encode(1, forKey: AnyCodingKey("v"))
+            try container.encode(sessionID, forKey: AnyCodingKey("session_id"))
+            try container.encode(reason, forKey: AnyCodingKey("reason"))
+        case let .streamError(sessionID, code, message):
+            try container.encode(1, forKey: AnyCodingKey("v"))
+            try container.encode(sessionID, forKey: AnyCodingKey("session_id"))
+            try container.encode(code, forKey: AnyCodingKey("code"))
+            try container.encode(message, forKey: AnyCodingKey("message"))
+        case let .inputEvent(sessionID, event):
+            try container.encode(1, forKey: AnyCodingKey("v"))
+            try container.encode(sessionID, forKey: AnyCodingKey("session_id"))
+            try container.encode(event, forKey: AnyCodingKey("event"))
         }
     }
 
 }
 
-public enum WireError: Error, Equatable, CustomStringConvertible {
+public enum WireError: Error, Equatable, CustomStringConvertible, LocalizedError {
     case frameTooLarge
     case frameTruncated
     case frameLengthMismatch
@@ -597,6 +949,8 @@ public enum WireError: Error, Equatable, CustomStringConvertible {
         case .entropyUnavailable: "secure randomness is unavailable"
         }
     }
+
+    public var errorDescription: String? { description }
 }
 
 public enum ControlFraming {

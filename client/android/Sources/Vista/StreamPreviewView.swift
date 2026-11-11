@@ -2,31 +2,53 @@
 import SwiftUI
 
 struct StreamPreviewView: View {
-    let application: RemoteApplication
+    let title: String
+    let subtitle: String
+    let symbolName: String
+    let target: StreamTarget
     var hostCapabilities: CapabilitySnapshot?
+    var streamMessage: String?
+    var isStreaming = false
+    var inputEnabled = false
+    var geometryEpoch: UInt64 = 1
     var onInvoke: ((String) -> Void)?
+    var onSelect: ((StreamTarget) -> Void)?
+    var onStop: (() -> Void)?
+    var onInput: ((PortableInputEvent) -> Void)?
 #if !SKIP
     var mediaRecords: [H264AccessUnit] = []
+    var mediaRecordSequence: UInt64 = 0
     var onKeyframeNeeded: (() -> Void)?
 #endif
+    @State private var text = ""
+    @State private var lastPointer: CGPoint?
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 22) {
+            VStack(spacing: 20) {
 #if canImport(VideoToolbox) && !SKIP
-                VideoStreamView(mediaRecords: mediaRecords, onKeyframeNeeded: onKeyframeNeeded)
+                ZStack {
+                    VideoStreamView(
+                        mediaRecords: mediaRecords,
+                        mediaRecordSequence: mediaRecordSequence,
+                        onKeyframeNeeded: onKeyframeNeeded
+                    )
+                    if inputEnabled {
+                        pointerSurface
+                    }
+                }
 #else
                 ZStack {
                     RoundedRectangle(cornerRadius: 25)
                         .fill(VistaPalette.surface)
 
                     VStack(spacing: 16) {
-                        VistaSymbol(name: application.symbolName, size: 56)
-                        VistaSymbol(name: "video.slash", size: 20)
-                        Text("No active stream")
+                        VistaSymbol(name: symbolName, size: 56)
+                        VistaSymbol(name: isStreaming ? "video" : "video.slash", size: 20)
+                        Text(isStreaming ? "Stream selected" : "No active stream")
                             .font(.headline)
                             .foregroundStyle(.white)
-                        Text("Live video will appear here once a Linux host, capture pipeline and secure transport are connected.")
+                        Text(streamMessage ?? "Live video appears here after the host starts the selected target.")
                             .font(.footnote)
                             .foregroundStyle(VistaPalette.subtleText)
                             .multilineTextAlignment(.center)
@@ -34,33 +56,29 @@ struct StreamPreviewView: View {
                     }
                     .padding(25)
                 }
-                .aspectRatio(1.25, contentMode: .fit)
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
 #endif
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(application.name)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(title)
                         .font(.title2.bold())
                         .foregroundStyle(.white)
-                    Text(application.source.description)
+                    Text(subtitle)
                         .font(.subheadline)
                         .foregroundStyle(VistaPalette.accent)
-#if !SKIP
-                    let streamDescription = mediaRecords.isEmpty
-                        ? "Waiting for an authenticated host video stream."
-                        : "Receiving authenticated H.264 frames from the paired host."
-#else
-                    let streamDescription = "Waiting for an authenticated host video stream."
-#endif
-                    Text(streamDescription)
-                        .font(.subheadline)
-                        .foregroundStyle(VistaPalette.subtleText)
+                    Text(
+                        streamMessage
+                            ?? (isStreaming
+                                ? "Receiving authenticated H.264 frames from the paired host."
+                                : "Selecting this target on the host…")
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(VistaPalette.subtleText)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                HStack(spacing: 16) {
-                    control("pointer", label: "Pointer")
-                    control("keyboard", label: "Keyboard")
-                    control("speaker.wave.2", label: "Audio")
+                if inputEnabled {
+                    inputBar
                 }
 
                 CapabilityControlsView(
@@ -78,19 +96,76 @@ struct StreamPreviewView: View {
             .frame(maxWidth: .infinity)
         }
         .background(VistaPalette.background.ignoresSafeArea())
-        .navigationTitle(application.name)
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { onSelect?(target) }
+        .onDisappear { onStop?() }
     }
 
-    private func control(_ symbol: String, label: String) -> some View {
-        HStack(spacing: 6) {
-            VistaSymbol(name: symbol, size: 16)
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(VistaPalette.subtleText)
+#if !SKIP
+    private var pointerSurface: some View {
+        GeometryReader { geometry in
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            lastPointer = value.location
+                            sendPointer(value.location, in: geometry.size)
+                        }
+                        .onEnded { value in
+                            lastPointer = value.location
+                            sendPointer(value.location, in: geometry.size)
+                            onInput?(.pointerButton(button: .primary, pressed: true))
+                            onInput?(.pointerButton(button: .primary, pressed: false))
+                        }
+                )
         }
-        .frame(maxWidth: .infinity, minHeight: 52)
-        .background(VistaPalette.surface, in: RoundedRectangle(cornerRadius: 14))
-        .accessibilityLabel("\(label) unavailable in preview")
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+    }
+
+    private func sendPointer(_ location: CGPoint, in size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        let x = min(max(location.x / size.width, 0), 1)
+        let y = min(max(location.y / size.height, 0), 1)
+        onInput?(.pointerAbsolute(x: x, y: y, geometryEpoch: geometryEpoch))
+    }
+#endif
+
+    private var inputBar: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                TextField("Keyboard input", text: $text)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                Button("Send") {
+                    guard !text.isEmpty else { return }
+                    onInput?(.textCommit(text: text))
+                    text = ""
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(VistaPalette.accent)
+            }
+            HStack(spacing: 8) {
+                keyButton("Esc", usage: 0x29)
+                keyButton("Tab", usage: 0x2B)
+                keyButton("Enter", usage: 0x28)
+                keyButton("⌫", usage: 0x2A)
+                keyButton("←", usage: 0x50)
+                keyButton("→", usage: 0x4F)
+            }
+        }
+        .padding(12)
+        .background(VistaPalette.surface, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func keyButton(_ label: String, usage: UInt16) -> some View {
+        Button(label) {
+            onInput?(.keyPhysical(usage: usage, pressed: true, isRepeat: false))
+            onInput?(.keyPhysical(usage: usage, pressed: false, isRepeat: false))
+        }
+        .buttonStyle(.bordered)
+        .tint(VistaPalette.accent)
     }
 }
