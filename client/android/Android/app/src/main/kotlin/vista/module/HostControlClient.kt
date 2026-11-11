@@ -1,40 +1,51 @@
 package vista.module
 
 import android.os.Handler
+import android.util.Log
 import android.os.Looper
+import android.view.Surface
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.security.SecureRandom
 import java.util.concurrent.Executors
-import javax.crypto.Cipher
-import javax.crypto.Mac
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 data class HostWindow(val id: Long, val title: String, val appId: String?)
 data class HostAction(val id: String, val label: String, val selectable: Boolean, val reason: String?)
 
+private data class MediaOfferInfo(val port: Int, val pairingId: String, val expiresAt: Long)
+
+/**
+ * Control and media connections to one Vista host session.
+ *
+ * The control connection pairs, selects a stream and serves catalog/capability
+ * updates. `media.offer` starts a second authenticated connection that carries
+ * AEAD-framed H.264 access units into [decoder].
+ */
 class HostControlClient {
     private val executor = Executors.newSingleThreadExecutor()
     private val commandExecutor = Executors.newSingleThreadExecutor()
+    private val mediaExecutor = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
+
+    val decoder = MediaDecoder()
+
     private var socket: Socket? = null
-    private var input: BufferedInputStream? = null
-    private var output: BufferedOutputStream? = null
-    private var clientSequence = 0L
-    private var hostSequence = 0L
-    private var sessionId = ""
-    private var sessionKeyOut = ByteArray(0)
-    private var sessionKeyIn = ByteArray(0)
-    private var outCounter = 0L
-    private var inCounter = 0L
-    private var sessionActive = false
+    private var mediaSocket: Socket? = null
+    private var session: VistaSession? = null
+    private var mediaSession: VistaSession? = null
+    @Volatile private var sessionActive = false
+    @Volatile private var mediaActive = false
+    @Volatile private var sessionId = ""
+    @Volatile private var geometryEpoch = 0L
+    @Volatile private var inputAllowed = false
+    @Volatile private var manualClose = false
+    @Volatile private var connectionGeneration = 0
+    @Volatile private var lastTarget: JSONObject? = null
+    private var hostAddress = ""
+    private var secret = ByteArray(0)
     private var capabilityConnectionEpoch = ""
     private var capabilityGrantEpoch = ""
     private var capabilityTargetId = ""
@@ -45,111 +56,173 @@ class HostControlClient {
     var onCatalog: ((List<HostWindow>) -> Unit)? = null
     var onCapabilities: ((List<HostAction>) -> Unit)? = null
     var onActionResult: ((String) -> Unit)? = null
+    var onConnected: ((Boolean) -> Unit)? = null
+    var onMediaActive: ((Boolean) -> Unit)? = null
+    var onStreamTarget: ((String) -> Unit)? = null
+    var onStreamError: ((String) -> Unit)? = null
+    var onVideoStats: ((Long) -> Unit)? = null
 
     fun connect(host: String, port: Int, secretHex: String) {
         close()
+        manualClose = false
+        val generation = ++connectionGeneration
         executor.execute {
-            try {
-                publish("Connecting…")
-                val secret = hex(secretHex)
-                require(secret.size == 32) { "Pairing secret must be 64 hex characters" }
-                val clientNonce = randomHex(32)
-                val sock = Socket()
-                sock.connect(InetSocketAddress(host, port), 12_000)
-                socket = sock
-                input = BufferedInputStream(sock.getInputStream())
-                output = BufferedOutputStream(sock.getOutputStream())
-                sendPlain(
-                    JSONObject()
-                        .put("seq", clientSequence++)
-                        .put("type", "client_hello")
-                        .put("versions", JSONObject().put("min", version()).put("max", version()))
-                        .put("client_id", "vista-android")
-                        .put("client_nonce", clientNonce)
-                )
-                val hello = readPlain()
-                check(hello.getString("type") == "server_hello") { "host did not send server hello" }
-                checkHostSequence(hello)
-                val hostId = hello.getString("host_id")
-                val hostNonce = hello.getString("host_nonce")
-                val pairingId = hello.getString("pairing_id")
-                val policy = hello.getJSONObject("policy")
-                val policyBits = permissionBits(policy)
-                val transcript = "vista-pairing-v1\nversion=1.0\nclient_id=vista-android\nclient_nonce=$clientNonce\nhost_id=$hostId\nhost_nonce=$hostNonce\npairing_id=$pairingId\npolicy=$policyBits\n"
-                sendPlain(
-                    JSONObject()
-                        .put("seq", clientSequence++)
-                        .put("type", "pairing_request")
-                        .put("pairing_id", pairingId)
-                        .put("tag", hmac(secret, "client-confirm\n".toByteArray() + transcript.toByteArray()).toHex())
-                )
-                val accepted = readPlain()
-                checkHostSequence(accepted)
-                check(accepted.getString("type") == "pairing_accepted") { "pairing rejected" }
-                sessionId = accepted.getString("session_id")
-                val hostTag = hmac(
-                    secret,
-                    "host-confirm\n".toByteArray() + transcript.toByteArray() + "\nsession=".toByteArray() + sessionId.toByteArray(),
-                )
-                check(hostTag.contentEquals(hex(accepted.getString("tag")))) { "host authentication failed" }
-                val keys = deriveKeys(secret, pairingId, transcript.toByteArray(), sessionId)
-                sessionKeyOut = keys.copyOfRange(0, 32)
-                sessionKeyIn = keys.copyOfRange(32, 64)
-                sendSecure(
-                    JSONObject()
-                        .put("seq", clientSequence++)
-                        .put("type", "session_open")
-                        .put("session_id", sessionId)
-                        .put(
-                            "permissions",
-                            JSONObject()
-                                .put("video", true)
-                                .put("audio", false)
-                                .put("input", false)
-                                .put("clipboard", false),
-                        )
-                )
-                val opened = readSecure()
-                check(opened.getString("type") == "session_opened") { "session was not opened" }
-                sessionActive = true
-                publish("Connected to ${hello.optString("host_name", host)}")
-                while (sessionActive) {
-                    val message = readSecure()
-                    when (message.getString("type")) {
-                        "capabilities.snapshot" -> {
-                            capabilityConnectionEpoch = message.getString("connection_epoch")
-                            capabilityGrantEpoch = message.getString("grant_epoch")
-                            capabilityTargetId = message.getString("target_id")
-                            capabilityTargetGeneration = message.getString("target_generation")
-                            capabilityRevision = message.getLong("capability_revision")
-                            val actions = parseActions(message.getJSONArray("actions"))
-                            publishCapabilities(actions)
-                        }
-                        "catalog.snapshot" -> publishCatalog(parseCatalog(message.getJSONArray("entries")))
-                        "action.result" -> publishActionResult(message)
-                        "pong" -> Unit
-                        "error", "session_close" -> throw IllegalStateException(message.optString("message", message.optString("reason", "host closed")))
-                    }
+            val parsedSecret = runCatching { VistaWire.hexToBytes(secretHex) }.getOrElse {
+                publish("Pairing secret must be 64 hex characters")
+                return@execute
+            }
+            secret = parsedSecret
+            hostAddress = host
+            var delayMs = 500L
+            var everConnected = false
+            while (!manualClose && generation == connectionGeneration) {
+                try {
+                    publish(if (everConnected) "Reconnecting…" else "Connecting…")
+                    runSession(host, port)
+                } catch (error: Throwable) {
+                    Log.e("VistaWire", "control connection failed", error)
+                    if (manualClose || generation != connectionGeneration) break
+                    publish("Connection lost: ${error.message ?: error.javaClass.simpleName}")
                 }
-            } catch (error: Throwable) {
-                publish("Connection failed: ${error.message ?: error.javaClass.simpleName}")
-                publishCatalog(emptyList())
-                publishCapabilities(emptyList())
-                closeSocket()
+                stopMedia()
+                sessionActive = false
+                session = null
+                inputAllowed = false
+                closeSocket(socket)
+                socket = null
+                if (manualClose || generation != connectionGeneration) break
+                everConnected = true
+                publishConnected(false)
+                publish("Reconnecting in ${delayMs / 1000}s…")
+                try {
+                    Thread.sleep(delayMs)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                delayMs = minOf(delayMs * 2, 5_000L)
             }
         }
+    }
+
+    /** One control connection; returns when the session ends or the user closes it. */
+    private fun runSession(host: String, port: Int) {
+        val sock = Socket()
+        sock.connect(InetSocketAddress(host, port), 12_000)
+        socket = sock
+        val control = VistaSession(
+            BufferedInputStream(sock.getInputStream()),
+            BufferedOutputStream(sock.getOutputStream()),
+            secret,
+            "vista-android",
+        )
+        session = control
+        control.trace = { Log.d("VistaWire", "control: $it") }
+        control.handshake(wantInput = true, encryptSessionOpen = true)
+        sessionId = control.sessionId
+        sessionActive = true
+        inputAllowed = control.policyInput
+        publish("Connected to $host" + if (inputAllowed) " (input enabled)" else "")
+        publishConnected(true)
+        sendSelection(control)
+        while (sessionActive && !manualClose) {
+            handle(control.readSecure())
+        }
+    }
+
+    fun selectDesktop() {
+        select(JSONObject().put("kind", "desktop"))
+    }
+
+    fun selectWindow(windowId: Long) {
+        select(JSONObject().put("kind", "window").put("id", windowId))
+    }
+
+    fun selectWorkspace(workspaceId: Long) {
+        select(JSONObject().put("kind", "workspace").put("id", workspaceId))
+    }
+
+    /** True when the host granted portable input for this session. */
+    fun canSendInput(): Boolean = inputAllowed
+
+    fun attachSurface(surface: Surface) {
+        decoder.attachSurface(surface)
+    }
+
+    /** Normalized pointer position within the streamed frame. */
+    fun sendPointer(x: Double, y: Double) {
+        if (!inputAllowed) return
+        commandExecutor.execute {
+            sendInputEvent(
+                JSONObject()
+                    .put("type", "pointer.absolute")
+                    .put("x", x.coerceIn(0.0, 1.0))
+                    .put("y", y.coerceIn(0.0, 1.0))
+                    .put("geometry_epoch", geometryEpoch),
+            )
+        }
+    }
+
+    fun sendPointerButton(pressed: Boolean) {
+        if (!inputAllowed) return
+        commandExecutor.execute {
+            sendInputEvent(
+                JSONObject()
+                    .put("type", "pointer.button")
+                    .put("button", "primary")
+                    .put("pressed", pressed),
+            )
+        }
+    }
+
+    fun sendKey(usage: Int, pressed: Boolean, repeat: Boolean) {
+        if (!inputAllowed) return
+        commandExecutor.execute {
+            sendInputEvent(
+                JSONObject()
+                    .put("type", "key.physical")
+                    .put("usage", usage)
+                    .put("pressed", pressed)
+                    .put("repeat", repeat),
+            )
+        }
+    }
+
+    fun sendText(text: String) {
+        if (!inputAllowed || text.isEmpty()) return
+        commandExecutor.execute {
+            sendInputEvent(JSONObject().put("type", "text.commit").put("text", text))
+        }
+    }
+
+    private fun sendInputEvent(event: JSONObject) {
+        if (!sessionActive) return
+        Log.d("VistaInput", "send ${event.optString("type")}")
+        try {
+            session?.sendSecure(
+                JSONObject()
+                    .put("type", "input.event")
+                    .put("v", 1)
+                    .put("session_id", sessionId)
+                    .put("event", event),
+            )
+        } catch (error: Throwable) {
+            publish("Input failed: ${error.message ?: "transport error"}")
+        }
+    }
+
+    fun detachSurface() {
+        decoder.detachSurface()
     }
 
     fun invoke(action: HostAction) {
         commandExecutor.execute {
             if (!sessionActive || !action.selectable) return@execute
             try {
-                sendSecure(
+                session?.sendSecure(
                     JSONObject()
-                        .put("seq", clientSequence++)
                         .put("type", "action.invoke")
                         .put("v", 1)
-                        .put("id", "android-${clientSequence}")
+                        .put("id", "android-${System.nanoTime()}")
                         .put("connection_epoch", capabilityConnectionEpoch)
                         .put("session_id", sessionId)
                         .put("grant_epoch", capabilityGrantEpoch)
@@ -159,8 +232,10 @@ class HostControlClient {
                         .put("action", action.id)
                         .put("schema_version", 1)
                         .put("parameters", JSONObject().apply {
-                            if (action.id == "window.maximize.set") put("value", action.label == "Maximize")
-                        })
+                            if (action.id == "window.maximize.set") {
+                                put("value", action.label == "Maximize")
+                            }
+                        }),
                 )
             } catch (error: Throwable) {
                 publish("Action failed: ${error.message ?: "transport error"}")
@@ -169,65 +244,166 @@ class HostControlClient {
     }
 
     fun close() {
+        manualClose = true
+        connectionGeneration++
         sessionActive = false
-        commandExecutor.execute { closeSocket() }
+        mediaActive = false
+        session = null
+        mediaSession = null
+        inputAllowed = false
+        closeSocket(socket)
+        closeSocket(mediaSocket)
+        socket = null
+        mediaSocket = null
+        publishConnected(false)
+        publishMediaActive(false)
         publishCatalog(emptyList())
         publishCapabilities(emptyList())
     }
 
-    private fun sendPlain(message: JSONObject) = writeFrame(message.toString().toByteArray())
-
-    private fun readPlain(): JSONObject = JSONObject(String(readFrame(), Charsets.UTF_8))
-
-    private fun sendSecure(message: JSONObject) {
-        val plaintext = message.toString().toByteArray()
-        val nonce = nonce(outCounter++)
-        val cipher = Cipher.getInstance("ChaCha20-Poly1305")
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(sessionKeyOut, "ChaCha20"), IvParameterSpec(nonce))
-        cipher.updateAAD(aad(1))
-        writeFrame(cipher.doFinal(plaintext))
+    private fun select(target: JSONObject) {
+        lastTarget = target
+        commandExecutor.execute {
+            if (!sessionActive) return@execute
+            val control = session ?: return@execute
+            try {
+                sendSelection(control)
+            } catch (error: Throwable) {
+                publish("Stream selection failed: ${error.message ?: "transport error"}")
+            }
+        }
     }
 
-    private fun readSecure(): JSONObject {
-        val sealed = readFrame()
-        val nonce = nonce(inCounter++)
-        val cipher = Cipher.getInstance("ChaCha20-Poly1305")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(sessionKeyIn, "ChaCha20"), IvParameterSpec(nonce))
-        cipher.updateAAD(aad(2))
-        return JSONObject(String(cipher.doFinal(sealed), Charsets.UTF_8)).also { checkHostSequence(it) }
+    private fun sendSelection(control: VistaSession) {
+        val target = lastTarget ?: JSONObject().put("kind", "desktop")
+        control.sendSecure(
+            JSONObject()
+                .put("type", "stream.select")
+                .put("v", 1)
+                .put("session_id", control.sessionId)
+                .put("target", target),
+        )
     }
 
-    private fun writeFrame(bytes: ByteArray) {
-        val out = output ?: error("not connected")
-        out.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(bytes.size).array())
-        out.write(bytes)
-        out.flush()
+    private fun handle(message: JSONObject) {
+        when (message.getString("type")) {
+            "capabilities.snapshot" -> {
+                capabilityConnectionEpoch = message.getString("connection_epoch")
+                capabilityGrantEpoch = message.getString("grant_epoch")
+                capabilityTargetId = message.getString("target_id")
+                capabilityTargetGeneration = message.getString("target_generation")
+                capabilityRevision = message.getLong("capability_revision")
+                publishCapabilities(parseActions(message.getJSONArray("actions")))
+            }
+            "catalog.snapshot" -> publishCatalog(parseCatalog(message.getJSONArray("entries")))
+            "action.result" -> publishActionResult(message)
+            "media.offer" -> {
+                val offer = MediaOfferInfo(
+                    port = message.getInt("port"),
+                    pairingId = message.optString("pairing_id"),
+                    expiresAt = message.optLong("expires_at"),
+                )
+                publish("Video endpoint on port ${offer.port}")
+                startMedia(offer)
+            }
+            "stream.started" -> {
+                geometryEpoch = message.optLong("geometry_epoch", 1)
+                val width = message.optInt("width", 0)
+                val height = message.optInt("height", 0)
+                val encoder = message.optString("encoder", "h264")
+                val target = message.optJSONObject("target")
+                val label = when (target?.optString("kind")) {
+                    "window" -> "window ${target.optLong("id")}"
+                    "workspace" -> "workspace ${target.optLong("id")}"
+                    else -> target?.optString("kind") ?: "stream"
+                }
+                publish("Streaming $label · $width×$height ($encoder)")
+                onStreamTarget?.let { callback -> main.post { callback(label) } }
+            }
+            "stream.stopped" -> {
+                stopMedia()
+                publish("Stream stopped: ${message.optString("reason", "host stopped the stream")}")
+            }
+            "stream.error" -> {
+                stopMedia()
+                val text = "${message.optString("code", "stream_error")}: ${message.optString("message")}"
+                publish(text)
+                onStreamError?.let { callback -> main.post { callback(text) } }
+            }
+            "pong" -> Unit
+            "session_close" -> {
+                publish("Host closed the session: ${message.optString("reason")}")
+                sessionActive = false
+            }
+            "error" -> throw IllegalStateException(
+                message.optString("message", message.optString("code", "host error")),
+            )
+        }
     }
 
-    private fun readFrame(): ByteArray {
-        val source = input ?: error("not connected")
-        val header = source.readNBytes(4)
-        check(header.size == 4) { "host closed the connection" }
-        val length = ByteBuffer.wrap(header).order(ByteOrder.BIG_ENDIAN).int
-        check(length in 1..(64 * 1024 + 16)) { "invalid frame length" }
-        val bytes = source.readNBytes(length)
-        check(bytes.size == length) { "truncated frame" }
-        return bytes
+    private fun startMedia(offer: MediaOfferInfo) {
+        stopMedia()
+        mediaExecutor.execute {
+            try {
+                val sock = Socket()
+                sock.connect(InetSocketAddress(hostAddress, offer.port), 12_000)
+                mediaSocket = sock
+                val media = VistaSession(
+                    BufferedInputStream(sock.getInputStream()),
+                    BufferedOutputStream(sock.getOutputStream()),
+                    secret,
+                    "vista-android-media",
+                )
+                mediaSession = media
+                media.trace = { Log.d("VistaWire", "media: $it") }
+                media.handshake(wantInput = false, encryptSessionOpen = false)
+                mediaActive = true
+                decoder.resetForNewStream()
+                publishMediaActive(true)
+                publish("Receiving video…")
+                media.sendKeyframeRequest()
+                var frames = 0L
+                while (mediaActive && sessionActive) {
+                    val record = media.readRecord()
+                    decoder.submit(record)
+                    frames++
+                    if (frames % 30L == 0L) {
+                        publishVideoStats(frames)
+                    }
+                }
+            } catch (error: Throwable) {
+                Log.e("VistaWire", "media connection failed", error)
+                if (mediaActive) {
+                    publish("Media ended: ${error.message ?: error.javaClass.simpleName}")
+                }
+            } finally {
+                mediaActive = false
+                mediaSession = null
+                publishMediaActive(false)
+                closeSocket(mediaSocket)
+                mediaSocket = null
+            }
+        }
     }
 
-    private fun checkHostSequence(message: JSONObject) {
-        val received = message.getLong("seq")
-        check(received == hostSequence) { "host sequence expected $hostSequence, got $received" }
-        hostSequence++
+    private fun stopMedia() {
+        mediaActive = false
+        closeSocket(mediaSocket)
+        mediaSocket = null
+        mediaSession = null
+        publishMediaActive(false)
     }
-
-    private fun aad(direction: Int): ByteArray = "vista-record-v1".toByteArray() + sessionId.toByteArray() + direction.toByte()
-    private fun nonce(counter: Long): ByteArray = ByteArray(12).also { ByteBuffer.wrap(it, 4, 8).order(ByteOrder.BIG_ENDIAN).putLong(counter) }
 
     private fun parseCatalog(entries: JSONArray): List<HostWindow> = buildList {
         for (index in 0 until entries.length()) {
             val entry = entries.getJSONObject(index)
-            add(HostWindow(entry.getLong("window_id"), entry.optString("title", "Window ${entry.getLong("window_id")}"), entry.optString("app_id").takeIf { it.isNotEmpty() }))
+            add(
+                HostWindow(
+                    entry.getLong("window_id"),
+                    entry.optString("title", "Window ${entry.getLong("window_id")}"),
+                    entry.optString("app_id").takeIf { it.isNotEmpty() },
+                ),
+            )
         }
     }
 
@@ -235,35 +411,32 @@ class HostControlClient {
         for (index in 0 until actions.length()) {
             val action = actions.getJSONObject(index)
             val presentation = action.optJSONObject("presentation")
-            add(HostAction(action.getString("id"), presentation?.optString("label", action.getString("id")) ?: action.getString("id"), action.optBoolean("supported") && action.optBoolean("enabled") && action.optString("authorization") == "granted", action.optString("reason").takeIf { it.isNotEmpty() }))
+            add(
+                HostAction(
+                    action.getString("id"),
+                    presentation?.optString("label", action.getString("id")) ?: action.getString("id"),
+                    action.optBoolean("supported") &&
+                        action.optBoolean("enabled") &&
+                        action.optString("authorization") == "granted",
+                    action.optString("reason").takeIf { it.isNotEmpty() },
+                ),
+            )
         }
     }
 
     private fun publish(value: String) = main.post { onState?.invoke(value) }
+    private fun publishConnected(value: Boolean) = main.post { onConnected?.invoke(value) }
+    private fun publishMediaActive(value: Boolean) = main.post { onMediaActive?.invoke(value) }
     private fun publishCatalog(value: List<HostWindow>) = main.post { onCatalog?.invoke(value) }
     private fun publishCapabilities(value: List<HostAction>) = main.post { onCapabilities?.invoke(value) }
-    private fun publishActionResult(value: JSONObject) = main.post { onActionResult?.invoke(value.optString("status", "unknown")) }
-    private fun closeSocket() { try { socket?.close() } catch (_: Throwable) {} ; socket = null; input = null; output = null }
+    private fun publishActionResult(value: JSONObject) =
+        main.post { onActionResult?.invoke(value.optString("status", "unknown")) }
+    private fun publishVideoStats(frames: Long) = main.post { onVideoStats?.invoke(frames) }
 
-    companion object {
-        private fun version() = JSONObject().put("major", 1).put("minor", 0)
-        private fun permissionBits(policy: JSONObject): Int = (if (policy.optBoolean("video")) 1 else 0) or (if (policy.optBoolean("audio")) 2 else 0) or (if (policy.optBoolean("input")) 4 else 0) or (if (policy.optBoolean("clipboard")) 8 else 0)
-        private fun randomHex(bytes: Int): String = ByteArray(bytes).also { SecureRandom().nextBytes(it) }.toHex()
-        private fun hex(value: String): ByteArray { check(value.length % 2 == 0) ; return value.chunked(2).map { it.toInt(16).toByte() }.toByteArray() }
-        private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
-        private fun hmac(key: ByteArray, value: ByteArray): ByteArray = Mac.getInstance("HmacSHA256").run { init(SecretKeySpec(key, algorithm)); doFinal(value) }
-        private fun deriveKeys(secret: ByteArray, pairingId: String, transcript: ByteArray, sessionId: String): ByteArray {
-            val salt = hmac(pairingId.toByteArray(), secret)
-            val info = "vista-session-v1\n$pairingId\n$sessionId\n".toByteArray() + transcript
-            var previous = ByteArray(0)
-            val output = ByteArray(64)
-            var offset = 0
-            for (counter in 1..2) {
-                previous = hmac(salt, previous + info + counter.toByte())
-                previous.copyInto(output, offset)
-                offset += previous.size
-            }
-            return output
+    private fun closeSocket(target: Socket?) {
+        try {
+            target?.close()
+        } catch (_: Throwable) {
         }
     }
 }

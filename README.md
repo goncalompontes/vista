@@ -1,6 +1,6 @@
 # Vista
 
-Vista is an open-source native application-streaming platform for Linux hosts and iPhone/iPad clients. It aims to stream **existing desktop windows** (starting with Wayland) and **independent remote application sessions**, with touch, keyboard, pointer, audio, and clipboard support. Its proposed future host-core architecture is OS-/compositor-neutral while implementation remains Linux-first; see [architecture review PR #67](https://github.com/goncalompontes/vista/pull/67).
+Vista is an open-source native application-streaming platform for Linux hosts and Android, iPhone and iPad clients. It aims to stream **existing desktop windows** (starting with Wayland) and **independent remote application sessions**, with touch, keyboard, pointer, audio, and clipboard support. Its proposed future host-core architecture is OS-/compositor-neutral while implementation remains Linux-first; see [architecture review PR #67](https://github.com/goncalompontes/vista/pull/67).
 
 Inspired by [Sill](https://github.com/Saffsanity/sill); not a fork or a drop-in Sill backend. For iOS/iPadOS development, use the [upstream Sill source-to-Vista map](docs/sill-reference.md) before reimplementing UI controls.
 
@@ -22,6 +22,18 @@ the producer cleanly. See [end-to-end verification](docs/e2e-verification.md)
 for the exact commands and numbers, and for what that run does not prove.
 Keyboard/pointer input and host actions are implemented but have not yet been
 verified end to end through the iOS UI. See the [test record and next steps](integrations/vista-computer-use/docs/END_TO_END.md#what-was-actually-exercised).
+
+The Android client is native Kotlin/Jetpack Compose and speaks the same v1
+control protocol: pairing, encrypted control records, live catalog, capability
+snapshot, semantic actions, authenticated H.264 playback through `MediaCodec`
+and touch-to-pointer input. Its debug APK builds from a clean tree and its wire
+core is checked against the shared Rust/Swift pairing vector in CI; it is the
+current MVP verification platform. On 2026-11-11 a headless Android 36 emulator
+streamed 1920×1080 from a real Niri host and the host accepted 12
+touch-derived input and hardware-key events ([evidence](docs/android-verification.md)).
+Drag/scroll, a typed text run, audio, clipboard and a physical-device run
+remain. iOS stays a
+separate SwiftUI app and is not a build dependency of Android.
 
 The experimental `vista-host serve` is single-client and has no TLS. Keep it
 on loopback and treat its pairing invite as a secret. Its live capture path
@@ -124,7 +136,7 @@ for pairing the real iOS client in the emulator.
 ## Repository layout
 
 - `host/`: Rust Linux host service foundation, including Niri window discovery, live window catalog events, and read-only portal capability diagnostics.
-- `client/`: native iOS/iPadOS SwiftUI shell, portable Swift models, control protocol/pairing, and an [interactive Arch browser preview](client/preview/README.md) for UI iteration; see [client setup](client/README.md).
+- `client/`: native iOS/iPadOS SwiftUI shell, native Android Kotlin/Compose client, portable Swift models, control protocol/pairing, and an [interactive Arch browser preview](client/preview/README.md) for UI iteration; see [client setup](client/README.md) and the [Android client](client/android/README.md).
 - `integrations/vista-computer-use/`: cross-client MCP server and Codex plugin for the vphone/QEMU iOS workflow and the Vista host service.
 - `docs/protocol.md`: versioned host/client control protocol, pairing, threat model and transport recommendation.
 - `docs/architecture.md`: host, transport, iOS, compositing and session architecture.

@@ -4,16 +4,12 @@ on:
   push:
     paths:
       - "client/core/**"
-      - "client/ios/Vista/Views/**"
-      - "client/android/Sources/Vista/**"
-      - "client/android/sync-sources.sh"
+      - "client/android/**"
       - ".github/workflows/client-portable.yml"
   pull_request:
     paths:
       - "client/core/**"
-      - "client/ios/Vista/Views/**"
-      - "client/android/Sources/Vista/**"
-      - "client/android/sync-sources.sh"
+      - "client/android/**"
       - ".github/workflows/client-portable.yml"
 
 permissions:
@@ -24,22 +20,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  android-source-drift:
-    name: Android generated-source drift
+  android-build:
+    name: Android build and wire tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Regenerate in an isolated temporary checkout and compare
-        shell: bash
-        run: |
-          set -euo pipefail
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "$tmp"' EXIT
-          git archive HEAD | tar -x -C "$tmp"
-          bash "$tmp/client/android/sync-sources.sh"
-          diff -ru \
-            "$GITHUB_WORKSPACE/client/android/Sources/Vista" \
-            "$tmp/client/android/Sources/Vista"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          # `tools` is no longer a valid sdkmanager package in the current
+          # command-line tools; install only what the build needs.
+          packages: "platform-tools platforms;android-36 build-tools;36.0.0"
+      - name: Build debug APK and run JVM wire tests
+        working-directory: client/android/Android
+        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon
 
   swift-core-linux:
     name: VistaCore tests (Linux, Swift 6.0)
@@ -50,7 +48,3 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run portable package tests on Linux
         run: swift test --package-path client/core
-
-# Android Skip/Gradle compilation is deliberately not represented as a passing
-# CI gate yet. See client/android/README.md for the reproducible blocker and
-# the exact evidence required before enabling a macOS runner job.

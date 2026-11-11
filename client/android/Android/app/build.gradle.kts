@@ -1,90 +1,77 @@
 import java.util.Properties
 
 plugins {
-    alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.android.application)
-    id("skip-build-plugin")
+    alias(libs.plugins.kotlin.compose)
 }
 
-skip {
-}
-
-kotlin {
-    compilerOptions {
-        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.fromTarget(libs.versions.jvm.get().toString())
-    }
-}
+val keystorePropertiesFile = file("keystore.properties")
 
 android {
-    namespace = group as String
+    namespace = "vista.module"
     compileSdk = libs.versions.android.sdk.compile.get().toInt()
-    compileOptions {
-        sourceCompatibility = JavaVersion.toVersion(libs.versions.jvm.get())
-        targetCompatibility = JavaVersion.toVersion(libs.versions.jvm.get())
-    }
-    packaging {
-        jniLibs {
-            keepDebugSymbols.add("**/*.so")
-            pickFirsts.add("**/*.so")
-            // this option would compress JNI .so files and reduce overall size for Skip Fuse apps, but cost more at install time
-            //useLegacyPackaging = true
-        }
-    }
 
     defaultConfig {
+        applicationId = "dev.vista.client"
         minSdk = libs.versions.android.sdk.min.get().toInt()
         targetSdk = libs.versions.android.sdk.compile.get().toInt()
-        // skip.tools.skip-build-plugin will automatically use Skip.env properties for:
-        // applicationId = ANDROID_APPLICATION_ID ?? PRODUCT_BUNDLE_IDENTIFIER
-        // versionCode = CURRENT_PROJECT_VERSION
-        // versionName = MARKETING_VERSION
+        versionCode = 1
+        versionName = "0.0.1"
     }
 
-    buildFeatures {
-        buildConfig = true
-    }
-
-    lint {
-        disable.add("Instantiatable")
-        disable.add("MissingPermission")
-    }
-
-    dependenciesInfo {
-        // Disables dependency metadata when building APKs.
-        includeInApk = false
-        // Disables dependency metadata when building Android App Bundles.
-        includeInBundle = false
-    }
-
-    // default signing configuration tries to load from keystore.properties
-    // see: https://skip.dev/docs/deployment/#export-signing
     signingConfigs {
-        val keystorePropertiesFile = file("keystore.properties")
-        create("release") {
-            if (keystorePropertiesFile.isFile) {
+        if (keystorePropertiesFile.isFile) {
+            create("release") {
                 val keystoreProperties = Properties()
                 keystoreProperties.load(keystorePropertiesFile.inputStream())
-                keyAlias = keystoreProperties.getProperty("keyAlias")
-                keyPassword = keystoreProperties.getProperty("keyPassword")
                 storeFile = file(keystoreProperties.getProperty("storeFile"))
                 storePassword = keystoreProperties.getProperty("storePassword")
-            } else {
-                // when there is no keystore.properties file, fall back to signing with debug config
-                keyAlias = signingConfigs.getByName("debug").keyAlias
-                keyPassword = signingConfigs.getByName("debug").keyPassword
-                storeFile = signingConfigs.getByName("debug").storeFile
-                storePassword = signingConfigs.getByName("debug").storePassword
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
             }
         }
     }
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
-            isDebuggable = false // can be set to true for debugging release build, but needs to be false when uploading to store
+            isDebuggable = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (keystorePropertiesFile.isFile) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
+
+    buildFeatures {
+        compose = true
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    packaging {
+        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.fromTarget(libs.versions.jvm.get())
+    }
+}
+
+dependencies {
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.material3)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.org.json)
 }
