@@ -152,6 +152,13 @@ class HostControlClient {
         }
     }
 
+    fun sendText(text: String) {
+        if (!inputAllowed || text.isEmpty()) return
+        commandExecutor.execute {
+            sendInputEvent(JSONObject().put("type", "text.commit").put("text", text))
+        }
+    }
+
     private fun sendInputEvent(event: JSONObject) {
         if (!sessionActive) return
         try {

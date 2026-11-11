@@ -84,8 +84,8 @@ to 182 before the client was stopped.
 - No pixel comparison or latency measurement. The frame count is the host's
   send count and the client's decode path, not a frame-rate or quality claim.
 - Pointer movement was not visually verified (the host count proves the
-  injector accepted the events). No drag, scroll, keyboard or text commit was
-  exercised.
+  injector accepted the events). No drag, scroll or physical key event was
+  exercised, and text commit is implemented but was not sent in this run.
 - The host path still captures the whole output and fullscreens a selected
   window; it is single-client and has no TLS. Treat the pairing secret and the
   LAN as trusted.

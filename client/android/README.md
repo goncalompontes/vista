@@ -6,13 +6,14 @@ transpiled copy of the SwiftUI views.
 
 **Status (2026-11-11):** pairing, the encrypted control record layer, the live
 window catalog, the capability snapshot and semantic `action.invoke` work, and
-the client now plays live host H.264 through `MediaCodec` and forwards touch as
-portable pointer events. The debug APK builds from a clean tree, its wire core
+the client now plays live host H.264 through `MediaCodec`, forwards touch as
+portable pointer events and commits typed text. The debug APK builds from a clean tree, its wire core
 passes the shared Rust/Swift pairing vector as JVM tests, and a headless
 Android 36 x86_64 emulator streamed 1920x1080 from the real host while the host
 accepted 12 touch-derived input events. See
-[Android verification](../../docs/android-verification.md). **Keyboard/text input,
-drag/scroll, audio and clipboard are not wired yet, and no physical device has
+[Android verification](../../docs/android-verification.md). **Physical key events,
+drag/scroll with a held button, audio and clipboard are not wired yet; text
+commit exists but has not been exercised end to end, and no physical device has
 been tested.**
 
 Earlier revisions transpiled the SwiftUI client with Skip Lite. That path is
@@ -117,9 +118,9 @@ recorded separately.
 
 ## Known gaps
 
-- Keyboard and text input, drag with button held across a gesture, scroll and
-  long-press/secondary click are not wired; only absolute pointer position and
-  the primary button are sent.
+- Physical keyboard events (`key.physical`) and drag with a button held across a
+  gesture, scroll and long-press/secondary click are not wired; the client sends
+  absolute pointer position, the primary button and committed text.
 - No retry/reconnect policy beyond reporting the failure, and no discovery.
 - Media decode is verified only on an x86_64 emulator; hardware-decoder
   behaviour on a phone is untested.

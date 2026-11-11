@@ -47,6 +47,7 @@ fun VistaAndroidRoot() {
     var mediaActive by remember { mutableStateOf(false) }
     var frames by remember { mutableStateOf(0L) }
     var target by remember { mutableStateOf("desktop") }
+    var textInput by remember { mutableStateOf("") }
 
     DisposableEffect(client) {
         client.onState = { status = it }
@@ -131,6 +132,25 @@ fun VistaAndroidRoot() {
                 "Touch: " + if (client.canSendInput()) "enabled" else "unavailable",
                 style = MaterialTheme.typography.labelSmall,
             )
+            if (client.canSendInput()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        textInput,
+                        { textInput = it },
+                        label = { Text("Send text to the host") },
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = {
+                            client.sendText(textInput)
+                            textInput = ""
+                        },
+                        enabled = textInput.isNotEmpty(),
+                    ) {
+                        Text("Send")
+                    }
+                }
+            }
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 item {
                     Button(onClick = { client.selectDesktop() }) { Text("Desktop") }
