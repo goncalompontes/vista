@@ -52,9 +52,10 @@ Demonstrated on 2026-11-11 with the Rust reference client (see
 
 Not yet demonstrated anywhere:
 
-- An action or input event reaching a real desktop through the transport. The
-  dispatcher, lease and injector are unit-tested; no end-to-end run has moved a
-  real pointer or typed real text.
+- A semantic action (`action.invoke`) reaching a real desktop through the
+  transport. One absolute pointer event now passes the encrypted channel, the
+  lease and the injector (see [input-verification.md](input-verification.md)),
+  but no action, click, drag or text commit has been exercised end to end.
 - Native-client playback beyond the 2026-11-10 iOS run recorded in the README:
   no sustained iOS session, no Android runtime playback, no decoder recovery
   evidence from a real device.
@@ -189,6 +190,8 @@ client cannot see or affect the host desktop.
 | Bounded media receive session + decoder seam | #95 | merged |
 | Encoder diagnostics + reference-client end-to-end evidence | #97 | merged |
 | Reference-client completion and clean-shutdown semantics (real desktop, workspace and window targets) | #98 | merged |
+| Skip-transpilable framing and view defaults | #99 | merged |
+| Input path: pointer event through the transport, lease and injector | this change | open |
 
 ### Next steps
 
