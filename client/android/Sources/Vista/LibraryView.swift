@@ -17,15 +17,31 @@ private enum LibraryFilter: String, CaseIterable, Identifiable {
     }
 }
 
+private struct DesktopDestination: Hashable {
+    let target: StreamTarget
+    let title: String
+    let subtitle: String
+}
+
 struct LibraryView: View {
     let onExit: () -> Void
     var liveApplications: [RemoteApplication] = []
+    var desktops: [CatalogWorkspace] = []
+    var output: CatalogOutput?
     var isLive = false
     var hostLabel: String?
     var hostCapabilities: CapabilitySnapshot?
+    var streamTarget: StreamTarget?
+    var streamMessage: String?
+    var inputEnabled = false
+    var geometryEpoch: UInt64 = 1
     var onInvoke: ((String) -> Void)?
+    var onSelectStream: ((StreamTarget) -> Void)?
+    var onStopStream: (() -> Void)?
+    var onInput: ((PortableInputEvent) -> Void)?
 #if !SKIP
     var mediaRecords: [H264AccessUnit] = []
+    var mediaRecordSequence: UInt64 = 0
     var onKeyframeNeeded: (() -> Void)?
 #endif
     @State private var filter: LibraryFilter = .all
@@ -67,7 +83,7 @@ struct LibraryView: View {
                                 .foregroundStyle(.white)
                             Text(
                                 isLive
-                                    ? "Showing the window catalog reported by the host. Video and input are not enabled yet."
+                                    ? "Showing the live window and virtual-desktop catalog reported by the host. Select one to stream it."
                                     : "This is a local interface preview. The catalog below is sample data, not discovered windows."
                             )
                             .font(.footnote)
@@ -77,6 +93,54 @@ struct LibraryView: View {
                     .padding(17)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(VistaPalette.surface, in: RoundedRectangle(cornerRadius: 19))
+
+                    if isLive {
+                        VStack(alignment: .leading, spacing: 13) {
+                            HStack {
+                                Text("Desktops")
+                                    .font(.title3.bold())
+                                    .foregroundStyle(.white)
+                                Spacer()
+                                if let output {
+                                    Text("\(output.width)×\(output.height) @ \(output.scale, specifier: "%.1f")×")
+                                        .font(.caption2)
+                                        .foregroundStyle(VistaPalette.subtleText)
+                                }
+                            }
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 10) {
+                                    NavigationLink(value: DesktopDestination(
+                                        target: .desktop,
+                                        title: "Active desktop",
+                                        subtitle: "Whole output"
+                                    )) {
+                                        DesktopTile(
+                                            title: "Active desktop",
+                                            subtitle: "Whole output",
+                                            symbol: "display",
+                                            selected: streamTarget == .desktop
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                    ForEach(desktops) { workspace in
+                                        NavigationLink(value: DesktopDestination(
+                                            target: .workspace(id: workspace.workspaceID),
+                                            title: workspace.displayName,
+                                            subtitle: "\(workspace.output) · desktop \(workspace.idx)"
+                                        )) {
+                                            DesktopTile(
+                                                title: workspace.displayName,
+                                                subtitle: workspace.isFocused ? "Focused" : "Virtual desktop",
+                                                symbol: workspace.isFocused ? "rectangle.inset.filled" : "rectangle",
+                                                selected: streamTarget == .workspace(id: workspace.workspaceID)
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     VStack(alignment: .leading, spacing: 13) {
                         Text("Applications")
@@ -133,7 +197,7 @@ struct LibraryView: View {
 
                     Text(
                         isLive
-                            ? "Catalog from the paired host. Video and input arrive in a later increment."
+                            ? "Catalog from the paired host. Selecting a window, desktop or virtual desktop starts an authenticated stream."
                             : "Streaming, host pairing and input are not available in this preview."
                     )
                         .font(.footnote)
@@ -158,16 +222,125 @@ struct LibraryView: View {
                 }
             }
             .navigationDestination(for: RemoteApplication.self) { app in
-                StreamPreviewView(
-                    application: app,
-                    hostCapabilities: hostCapabilities,
-                    onInvoke: onInvoke
 #if !SKIP
-                    , mediaRecords: mediaRecords, onKeyframeNeeded: onKeyframeNeeded
-#endif
+                StreamPreviewView(
+                    title: app.name,
+                    subtitle: app.subtitle,
+                    symbolName: app.symbolName,
+                    target: windowTarget(for: app),
+                    hostCapabilities: hostCapabilities,
+                    streamMessage: streamMessage,
+                    isStreaming: streamTarget == windowTarget(for: app),
+                    inputEnabled: inputEnabled,
+                    geometryEpoch: geometryEpoch,
+                    onInvoke: onInvoke,
+                    onSelect: onSelectStream,
+                    onStop: onStopStream,
+                    onInput: onInput,
+                    mediaRecords: mediaRecords,
+                    mediaRecordSequence: mediaRecordSequence,
+                    onKeyframeNeeded: onKeyframeNeeded
                 )
+#else
+                StreamPreviewView(
+                    title: app.name,
+                    subtitle: app.subtitle,
+                    symbolName: app.symbolName,
+                    target: windowTarget(for: app),
+                    hostCapabilities: hostCapabilities,
+                    streamMessage: streamMessage,
+                    isStreaming: streamTarget == windowTarget(for: app),
+                    inputEnabled: inputEnabled,
+                    geometryEpoch: geometryEpoch,
+                    onInvoke: onInvoke,
+                    onSelect: onSelectStream,
+                    onStop: onStopStream,
+                    onInput: onInput
+                )
+#endif
+            }
+            .navigationDestination(for: DesktopDestination.self) { destination in
+#if !SKIP
+                StreamPreviewView(
+                    title: destination.title,
+                    subtitle: destination.subtitle,
+                    symbolName: "display",
+                    target: destination.target,
+                    hostCapabilities: hostCapabilities,
+                    streamMessage: streamMessage,
+                    isStreaming: streamTarget == destination.target,
+                    inputEnabled: inputEnabled,
+                    geometryEpoch: geometryEpoch,
+                    onInvoke: onInvoke,
+                    onSelect: onSelectStream,
+                    onStop: onStopStream,
+                    onInput: onInput,
+                    mediaRecords: mediaRecords,
+                    mediaRecordSequence: mediaRecordSequence,
+                    onKeyframeNeeded: onKeyframeNeeded
+                )
+#else
+                StreamPreviewView(
+                    title: destination.title,
+                    subtitle: destination.subtitle,
+                    symbolName: "display",
+                    target: destination.target,
+                    hostCapabilities: hostCapabilities,
+                    streamMessage: streamMessage,
+                    isStreaming: streamTarget == destination.target,
+                    inputEnabled: inputEnabled,
+                    geometryEpoch: geometryEpoch,
+                    onInvoke: onInvoke,
+                    onSelect: onSelectStream,
+                    onStop: onStopStream,
+                    onInput: onInput
+                )
+#endif
             }
         }
+    }
+}
+
+private func windowTarget(for app: RemoteApplication) -> StreamTarget {
+    if let id = UInt64(app.id.dropFirst()) {
+        return .window(id: id)
+    }
+    return .desktop
+}
+
+private struct DesktopTile: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 11) {
+            VistaSymbol(name: symbol, size: 20)
+                .frame(width: 38, height: 38)
+                .background(VistaPalette.elevated, in: RoundedRectangle(cornerRadius: 11))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(VistaPalette.subtleText)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(width: 210, alignment: .leading)
+        .background(
+            selected ? VistaPalette.accent.opacity(0.22) : VistaPalette.surface,
+            in: RoundedRectangle(cornerRadius: 16)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(selected ? VistaPalette.accent : .clear, lineWidth: 1)
+        )
     }
 }
 

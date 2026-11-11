@@ -212,12 +212,65 @@ public final class ControlPairingClient {
         state = .active
     }
 
+    /// Consume an optional media endpoint announcement while preserving strict
+    /// host sequencing.
+    @discardableResult
+    public func acceptMediaOffer(_ envelope: Envelope) throws -> MediaOffer {
+        try checkHostSequence(envelope)
+        guard case let .mediaOffer(offer) = envelope.body else {
+            throw WireError.unexpectedMessage(envelope.body.typeName)
+        }
+        return offer
+    }
+
     public func keyframeRequest() throws -> Envelope {
         guard state == .active else {
             throw WireError.invalidTransition("an active session")
         }
         guard let sessionID else { throw WireError.sessionMismatch }
         let envelope = Envelope(seq: nextClientSeq, body: .keyframeRequest(sessionID: sessionID))
+        nextClientSeq &+= 1
+        return envelope
+    }
+
+    public func selectStream(_ target: StreamTarget) throws -> Envelope {
+        guard state == .active, let sessionID else {
+            throw WireError.invalidTransition("an active session")
+        }
+        let envelope = Envelope(
+            seq: nextClientSeq,
+            body: .streamSelect(sessionID: sessionID, target: target)
+        )
+        nextClientSeq &+= 1
+        return envelope
+    }
+
+    public func stopStream() throws -> Envelope {
+        guard state == .active, let sessionID else {
+            throw WireError.invalidTransition("an active session")
+        }
+        let envelope = Envelope(seq: nextClientSeq, body: .streamStop(sessionID: sessionID))
+        nextClientSeq &+= 1
+        return envelope
+    }
+
+    public func requestCatalog() throws -> Envelope {
+        guard state == .active, let sessionID else {
+            throw WireError.invalidTransition("an active session")
+        }
+        let envelope = Envelope(seq: nextClientSeq, body: .catalogRequest(sessionID: sessionID))
+        nextClientSeq &+= 1
+        return envelope
+    }
+
+    public func sendInput(_ event: PortableInputEvent) throws -> Envelope {
+        guard state == .active, let sessionID else {
+            throw WireError.invalidTransition("an active session")
+        }
+        let envelope = Envelope(
+            seq: nextClientSeq,
+            body: .inputEvent(sessionID: sessionID, event: event)
+        )
         nextClientSeq &+= 1
         return envelope
     }
@@ -251,6 +304,25 @@ public final class ControlPairingClient {
             throw WireError.sessionMismatch
         }
         return result
+    }
+
+    /// Validate host stream notifications and advance the same sequence used
+    /// by catalog and capability messages.
+    public func acceptStreamEvent(_ envelope: Envelope) throws {
+        guard state == .active else {
+            throw WireError.invalidTransition("an active session")
+        }
+        try checkHostSequence(envelope)
+        let receivedSessionID: String
+        switch envelope.body {
+        case let .streamStarted(id, _, _, _, _, _),
+             let .streamStopped(id, _),
+             let .streamError(id, _, _):
+            receivedSessionID = id
+        default:
+            throw WireError.unexpectedMessage(envelope.body.typeName)
+        }
+        guard receivedSessionID == sessionID else { throw WireError.sessionMismatch }
     }
 
     public func ping(nonce: UInt64) throws -> Envelope {

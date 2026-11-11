@@ -1,0 +1,58 @@
+name: Computer-use MCP
+
+on:
+  push:
+    paths:
+      - "integrations/vista-computer-use/**"
+      - ".github/workflows/computer-use.yml"
+  pull_request:
+    paths:
+      - "integrations/vista-computer-use/**"
+      - ".github/workflows/computer-use.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile the package and tests
+        working-directory: integrations/vista-computer-use
+        run: PYTHONPATH=src python -m compileall -q src tests
+
+      - name: Unit tests
+        working-directory: integrations/vista-computer-use
+        run: PYTHONPATH=src python -m unittest discover -s tests -v
+
+      - name: Validate manifests and list tools
+        working-directory: integrations/vista-computer-use
+        run: |
+          ./bin/vista-computer-use-mcp --version
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path(".")
+          for name in (".mcp.json", "opencode.jsonc.example"):
+              path = root / name
+              text = path.read_text()
+              # opencode.jsonc.example is JSON with a schema field only; it has
+              # no comments, so standard JSON parsing is intentional.
+              json.loads(text)
+          json.loads((root / ".codex-plugin" / "plugin.json").read_text())
+          print("manifests: ok")
+          PY
+          PYTHONPATH=src python -m vista_computer_use --list-tools > /tmp/vista-tools.json
+          python - <<'PY'
+          import json
+          tools = json.load(open("/tmp/vista-tools.json"))
+          assert len(tools) == 32, len(tools)
+          assert tools[0]["name"] == "vista_status"
+          print(f"tools: {len(tools)}")
+          PY

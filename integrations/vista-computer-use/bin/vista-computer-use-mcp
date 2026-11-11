@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Launch the Vista computer-use MCP server from a source checkout.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+package_root="$(cd "$here/.." && pwd)"
+export PYTHONPATH="$package_root/src${PYTHONPATH:+:$PYTHONPATH}"
+exec "${PYTHON:-python3}" -m vista_computer_use "$@"

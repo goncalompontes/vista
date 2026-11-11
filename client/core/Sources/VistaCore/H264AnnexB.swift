@@ -117,6 +117,10 @@ public struct H264StreamGate: Sendable {
         let description = try H264AnnexB.describe(unit)
         if unit.discontinuity {
             waitingForKeyframe = true
+            // Parameter sets belong to a decoder generation. Never reuse SPS/PPS
+            // from the previous stream after a target switch or queue loss.
+            sps.removeAll()
+            pps.removeAll()
         }
         if description.hasParameterSets {
             sps = description.sps
@@ -138,6 +142,10 @@ public struct H264StreamGate: Sendable {
     /// Force waiting for the next SPS/PPS-prefixed IDR, e.g. after a reconnect.
     public mutating func resetForDiscontinuity() {
         waitingForKeyframe = true
+        // A reconnect or decoder failure starts a new generation. Cached
+        // parameter sets must not leak across that boundary.
+        sps.removeAll()
+        pps.removeAll()
     }
 }
 #endif

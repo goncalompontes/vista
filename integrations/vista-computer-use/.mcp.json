@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "vista_computer_use": {
+      "command": "./bin/vista-computer-use-mcp",
+      "args": [],
+      "cwd": ".",
+      "startup_timeout_sec": 20,
+      "tool_timeout_sec": 900,
+      "env_vars": [
+        "VISTA_HOME",
+        "VPHONE_HOME",
+        "VPHONE_DEVICES",
+        "VPHONE_CID",
+        "VPHONE_VM",
+        "VISTA_CU_QMP",
+        "VPHONE_QMP",
+        "VISTA_HOST_BIN",
+        "VISTA_CU_STATE_DIR",
+        "VISTA_CU_SCREENSHOT_DIR",
+        "VISTA_CU_ALLOWED_ROOTS",
+        "VISTA_CU_MAX_IMAGE_BYTES",
+        "VISTA_CU_TIMEOUT",
+        "VSOCK_DIR"
+      ]
+    }
+  }
+}

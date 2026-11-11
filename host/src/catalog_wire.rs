@@ -6,15 +6,17 @@
 //! process arguments or filesystem paths. Limits are enforced on both Rust and
 //! Swift sides.
 
-use crate::Window;
+use crate::{OutputInfo, Window, Workspace};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 pub const CATALOG_CONTRACT_VERSION: u16 = 1;
 pub const CATALOG_MESSAGE_TYPE: &str = "catalog.snapshot";
 pub const MAX_CATALOG_ENTRIES: usize = 256;
+pub const MAX_CATALOG_WORKSPACES: usize = 64;
 pub const MAX_TITLE_BYTES: usize = 256;
 pub const MAX_APP_ID_BYTES: usize = 128;
+pub const MAX_OUTPUT_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogWireError {
@@ -94,7 +96,100 @@ impl CatalogEntry {
     }
 }
 
+/// One Niri workspace (virtual desktop) that a client may select for a
+/// full-desktop stream. Metadata only; selecting it is a separate request.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CatalogWorkspace {
+    pub workspace_id: u64,
+    pub idx: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub output: String,
+    #[serde(default)]
+    pub is_active: bool,
+    #[serde(default)]
+    pub is_focused: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_window_id: Option<u64>,
+}
+
+impl CatalogWorkspace {
+    pub fn from_workspace(workspace: &Workspace) -> Self {
+        Self {
+            workspace_id: workspace.id,
+            idx: workspace.idx,
+            name: workspace.name.clone(),
+            output: workspace.output.clone(),
+            is_active: workspace.is_active,
+            is_focused: workspace.is_focused,
+            active_window_id: workspace.active_window_id,
+        }
+    }
+
+    pub fn display_name(&self) -> String {
+        self.name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("Desktop {}", self.idx))
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.idx == 0 {
+            return Err("workspace idx must be non-zero".into());
+        }
+        if self.output.is_empty() || self.output.len() > MAX_OUTPUT_NAME_BYTES {
+            return Err("invalid workspace output".into());
+        }
+        if let Some(name) = &self.name
+            && (name.len() > MAX_TITLE_BYTES || name.chars().any(char::is_control))
+        {
+            return Err(format!("invalid workspace name for {}", self.workspace_id));
+        }
+        Ok(())
+    }
+}
+
+/// Logical geometry of the streamed output. Desktop and window streams are
+/// delivered in this coordinate space, which lets the client map normalized
+/// pointer coordinates without knowing compositor details.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CatalogOutput {
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub scale: f64,
+}
+
+impl CatalogOutput {
+    pub fn from_output(output: &OutputInfo) -> Option<Self> {
+        let logical = output.logical.as_ref()?;
+        Some(Self {
+            name: output.name.clone(),
+            width: logical.width,
+            height: logical.height,
+            scale: logical.scale,
+        })
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.name.is_empty() || self.name.len() > MAX_OUTPUT_NAME_BYTES {
+            return Err("invalid output name".into());
+        }
+        if self.width == 0
+            || self.height == 0
+            || self.width > 16_384
+            || self.height > 16_384
+            || !self.scale.is_finite()
+            || self.scale <= 0.0
+        {
+            return Err("invalid output geometry".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CatalogSnapshot {
     pub v: u16,
     #[serde(rename = "type")]
@@ -105,6 +200,10 @@ pub struct CatalogSnapshot {
     pub generation: String,
     pub revision: u64,
     pub entries: Vec<CatalogEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspaces: Vec<CatalogWorkspace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<CatalogOutput>,
 }
 
 impl CatalogSnapshot {
@@ -128,6 +227,42 @@ impl CatalogSnapshot {
             generation: generation.into(),
             revision,
             entries,
+            workspaces: Vec::new(),
+            output: None,
+        };
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+
+    pub fn from_niri(
+        connection_epoch: impl Into<String>,
+        session_id: Option<String>,
+        generation: impl Into<String>,
+        revision: u64,
+        windows: &[Window],
+        workspaces: &[Workspace],
+        output: Option<&OutputInfo>,
+    ) -> Result<Self, String> {
+        let entries: Vec<_> = windows
+            .iter()
+            .take(MAX_CATALOG_ENTRIES)
+            .map(CatalogEntry::from_window)
+            .collect();
+        let workspaces: Vec<_> = workspaces
+            .iter()
+            .take(MAX_CATALOG_WORKSPACES)
+            .map(CatalogWorkspace::from_workspace)
+            .collect();
+        let snapshot = Self {
+            v: CATALOG_CONTRACT_VERSION,
+            message_type: CATALOG_MESSAGE_TYPE.into(),
+            connection_epoch: connection_epoch.into(),
+            session_id,
+            generation: generation.into(),
+            revision,
+            entries,
+            workspaces,
+            output: output.and_then(CatalogOutput::from_output),
         };
         snapshot.validate()?;
         Ok(snapshot)
@@ -157,12 +292,27 @@ impl CatalogSnapshot {
         if self.entries.len() > MAX_CATALOG_ENTRIES {
             return Err(format!("catalog exceeds {MAX_CATALOG_ENTRIES} entries"));
         }
+        if self.workspaces.len() > MAX_CATALOG_WORKSPACES {
+            return Err(format!(
+                "catalog exceeds {MAX_CATALOG_WORKSPACES} workspaces"
+            ));
+        }
         let mut seen = BTreeSet::new();
         for entry in &self.entries {
             entry.validate()?;
             if !seen.insert(entry.window_id) {
                 return Err(format!("duplicate window id {}", entry.window_id));
             }
+        }
+        let mut seen_workspaces = BTreeSet::new();
+        for workspace in &self.workspaces {
+            workspace.validate()?;
+            if !seen_workspaces.insert(workspace.workspace_id) {
+                return Err(format!("duplicate workspace id {}", workspace.workspace_id));
+            }
+        }
+        if let Some(output) = &self.output {
+            output.validate()?;
         }
         Ok(())
     }

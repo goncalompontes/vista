@@ -24,11 +24,21 @@ private struct VistaRootView: View {
                         showingDemo = false
                     },
                     liveApplications: catalog.applications,
+                    desktops: catalog.desktops,
+                    output: catalog.output,
                     isLive: catalog.isLive,
                     hostLabel: catalog.hostName,
                     hostCapabilities: catalog.capabilities,
+                    streamTarget: catalog.streamTarget,
+                    streamMessage: catalog.streamMessage,
+                    inputEnabled: catalog.inputEnabled,
+                    geometryEpoch: catalog.geometryEpoch,
                     onInvoke: { actionID in catalog.invokeAction(id: actionID) },
+                    onSelectStream: { target in catalog.selectStream(target) },
+                    onStopStream: { catalog.stopStream() },
+                    onInput: { event in catalog.sendInput(event) },
                     mediaRecords: catalog.mediaRecords,
+                    mediaRecordSequence: catalog.mediaRecordSequence,
                     onKeyframeNeeded: { catalog.requestMediaKeyframe() }
                 )
             } else {

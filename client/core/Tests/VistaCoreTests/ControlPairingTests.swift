@@ -205,9 +205,24 @@ final class ControlPairingTests: XCTestCase {
         )
         XCTAssertEqual(client.state, .active)
 
+        try client.acceptStreamEvent(Envelope(seq: 3, body: .streamStarted(
+            sessionID: sessionIDBytes.hexString,
+            target: .desktop,
+            width: 1920,
+            height: 1080,
+            geometryEpoch: 2,
+            encoder: "test"
+        )))
+        try client.acceptStreamEvent(Envelope(seq: 4, body: .streamStopped(
+            sessionID: sessionIDBytes.hexString, reason: "stopped"
+        )))
+        try client.acceptStreamEvent(Envelope(seq: 5, body: .streamError(
+            sessionID: sessionIDBytes.hexString, code: "test", message: "failed"
+        )))
+
         let ping = try client.ping(nonce: 42)
         XCTAssertEqual(ping.seq, 3)
-        try client.acceptPong(Envelope(seq: 3, body: .pong(nonce: 42)), nonce: 42)
+        try client.acceptPong(Envelope(seq: 6, body: .pong(nonce: 42)), nonce: 42)
         XCTAssertEqual(try client.sessionClose(reason: "done").seq, 4)
         XCTAssertEqual(client.state, .closed)
     }

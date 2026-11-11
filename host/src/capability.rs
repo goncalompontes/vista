@@ -46,6 +46,7 @@ pub const MAX_DESTRUCTIVE_ACTIONS_PER_SECOND: u32 = 2;
 pub const SCHEMA_EMPTY: &str = "vista.empty.v1";
 pub const SCHEMA_MAXIMIZE_SET: &str = "vista.window.maximize.set.v1";
 pub const SCHEMA_WORKSPACE_STEP: &str = "vista.desktop.workspace.step.v1";
+pub const SCHEMA_WORKSPACE_FOCUS: &str = "vista.desktop.workspace.focus.v1";
 pub const SCHEMA_EXTENSION: &str = "vista.extension.v1";
 
 /// Structured contract failure, carried both by local validation errors and by
@@ -1471,6 +1472,14 @@ impl<R: CommandRunner> ActionBackend for NiriActionBackend<R> {
                 SCHEMA_WORKSPACE_STEP,
                 ActionPresentation::new("Switch workspace"),
             ),
+            descriptor(
+                "desktop.workspace.focus",
+                true,
+                true,
+                Authorization::Granted,
+                SCHEMA_WORKSPACE_FOCUS,
+                ActionPresentation::new("Switch desktop"),
+            ),
             ActionDescriptor {
                 id: "window.maximize.set".into(),
                 schema_version: 1,
@@ -1491,21 +1500,99 @@ impl<R: CommandRunner> ActionBackend for NiriActionBackend<R> {
         action: &str,
         parameters: &BTreeMap<String, Value>,
     ) -> Result<BackendOutcome, ContractErrorCode> {
-        let window_id = Self::window_id(target)?;
+        let window_id = || Self::window_id(target);
         let arguments = match action {
-            "window.focus" => vec!["focus-window".into(), "--id".into(), window_id.to_string()],
-            "window.close" => vec!["close-window".into(), "--id".into(), window_id.to_string()],
+            "window.focus" => vec![
+                "focus-window".into(),
+                "--id".into(),
+                window_id()?.to_string(),
+            ],
+            "window.close" => vec![
+                "close-window".into(),
+                "--id".into(),
+                window_id()?.to_string(),
+            ],
             "desktop.workspace.step" => match parameters.get("direction").and_then(Value::as_str) {
                 Some("previous") => vec!["focus-workspace-up".into()],
                 Some("next") => vec!["focus-workspace-down".into()],
                 _ => return Err(ContractErrorCode::InvalidParameters),
             },
+            "desktop.workspace.focus" => {
+                let idx = parameters
+                    .get("idx")
+                    .and_then(Value::as_u64)
+                    .ok_or(ContractErrorCode::InvalidParameters)?;
+                if idx == 0 || idx > u64::from(u8::MAX) {
+                    return Err(ContractErrorCode::InvalidParameters);
+                }
+                vec!["focus-workspace".into(), idx.to_string()]
+            }
             _ => return Err(ContractErrorCode::UnsupportedAction),
         };
         self.runner
             .run(&arguments)
             .map_err(|_| ContractErrorCode::BackendUnavailable)?;
         Ok(BackendOutcome::completed())
+    }
+}
+
+/// Which Niri surface a capability snapshot describes. A window exposes
+/// window-scoped actions; desktop and workspace targets expose only actions
+/// that make sense without a single window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NiriTargetScope {
+    Window,
+    Workspace,
+    Desktop,
+}
+
+/// Target-scoped view of `NiriActionBackend`. The shared action contract keeps
+/// one backend implementation, while the snapshot only advertises actions that
+/// can actually succeed for the selected stream target.
+pub struct ScopedNiriBackend {
+    scope: NiriTargetScope,
+    inner: NiriActionBackend,
+}
+
+impl ScopedNiriBackend {
+    pub fn new(scope: NiriTargetScope) -> Self {
+        Self {
+            scope,
+            inner: NiriActionBackend::default(),
+        }
+    }
+}
+
+impl ActionBackend for ScopedNiriBackend {
+    fn descriptors(&self) -> Vec<ActionDescriptor> {
+        self.inner
+            .descriptors()
+            .into_iter()
+            .filter(|action| match self.scope {
+                NiriTargetScope::Window => matches!(
+                    action.id.as_str(),
+                    "window.focus"
+                        | "window.close"
+                        | "window.maximize.set"
+                        | "desktop.workspace.step"
+                ),
+                NiriTargetScope::Workspace | NiriTargetScope::Desktop => {
+                    matches!(
+                        action.id.as_str(),
+                        "desktop.workspace.step" | "desktop.workspace.focus"
+                    )
+                }
+            })
+            .collect()
+    }
+
+    fn execute(
+        &mut self,
+        target: &TargetRef,
+        action: &str,
+        parameters: &BTreeMap<String, Value>,
+    ) -> Result<BackendOutcome, ContractErrorCode> {
+        self.inner.execute(target, action, parameters)
     }
 }
 

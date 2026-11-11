@@ -9,9 +9,10 @@ import VistaCore
 /// host transport will call `controller.receive` with media records.
 struct VideoStreamView: View {
     let mediaRecords: [H264AccessUnit]
+    let mediaRecordSequence: UInt64
     let onKeyframeNeeded: (() -> Void)?
     @StateObject private var controller = VideoStreamController()
-    @State private var consumedMediaRecords = 0
+    @State private var consumedMediaSequence: UInt64 = 0
 
     var body: some View {
         VStack(spacing: 12) {
@@ -57,16 +58,22 @@ struct VideoStreamView: View {
             controller.start()
             consumeMediaRecords()
         }
-        .onChange(of: mediaRecords.count) { _ in consumeMediaRecords() }
+        .onChange(of: mediaRecordSequence) { _ in consumeMediaRecords() }
         .onDisappear { controller.stop() }
     }
 
     private func consumeMediaRecords() {
-        guard consumedMediaRecords < mediaRecords.count else { return }
-        for record in mediaRecords.dropFirst(consumedMediaRecords) {
+        guard mediaRecordSequence != consumedMediaSequence else { return }
+        let unseen = mediaRecordSequence >= consumedMediaSequence
+            ? mediaRecordSequence - consumedMediaSequence
+            : mediaRecordSequence
+        if unseen > UInt64(mediaRecords.count) {
+            controller.resetForReconnect()
+        }
+        for record in mediaRecords.suffix(Int(min(unseen, UInt64(mediaRecords.count)))) {
             controller.receive(record)
         }
-        consumedMediaRecords = mediaRecords.count
+        consumedMediaSequence = mediaRecordSequence
     }
 }
 

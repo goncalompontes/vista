@@ -2,6 +2,10 @@
 /host/target/
 .DS_Store
 *.swp
+/runs/computer-use/
+/runs/census/
+__pycache__/
+*.pyc
 /client/core/.build/
 /client/core/.swiftpm/
 /client/ios/*.xcodeproj/
