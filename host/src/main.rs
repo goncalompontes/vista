@@ -1378,7 +1378,17 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
                 }
             }
             Ok(None) => break,
-            Err(_) => {}
+            Err(vista_host::media_transport::MediaError::Io(error))
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => {
+                client.close("media receive failed");
+                return Err(NiriError::Unavailable(format!(
+                    "media receive failed after {received}/{frames} frames: {error}"
+                )));
+            }
         }
         // Poll the control channel for stream.started and errors.
         if let Ok(Some(envelope)) = client.poll_control() {
@@ -1406,6 +1416,10 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
                 _ => {}
             }
         }
+    }
+    if let Err(error) = require_frame_count(received, frames) {
+        client.close("live client incomplete");
+        return Err(NiriError::Unavailable(error));
     }
     client.close("live client complete");
     let elapsed = started.elapsed();
@@ -1442,6 +1456,16 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
         }
     }
     Ok(())
+}
+
+fn require_frame_count(received: usize, requested: usize) -> Result<(), String> {
+    if received == requested {
+        Ok(())
+    } else {
+        Err(format!(
+            "media stream ended after {received}/{requested} frames before the 30-second deadline"
+        ))
+    }
 }
 
 fn media_stream_command(args: &[&str], json: bool) -> Result<(), NiriError> {
@@ -1541,5 +1565,28 @@ fn main() -> ExitCode {
             eprintln!("vista-host: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod live_client_tests {
+    use super::require_frame_count;
+
+    #[test]
+    fn exact_frame_count_is_required_for_success() {
+        assert_eq!(require_frame_count(8, 8), Ok(()));
+    }
+
+    #[test]
+    fn early_stream_end_reports_received_and_requested_frames() {
+        assert_eq!(
+            require_frame_count(3, 8).unwrap_err(),
+            "media stream ended after 3/8 frames before the 30-second deadline"
+        );
+    }
+
+    #[test]
+    fn zero_frames_is_not_a_successful_stream() {
+        assert!(require_frame_count(0, 1).is_err());
     }
 }

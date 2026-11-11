@@ -892,10 +892,7 @@ impl MediaEndpoint {
                     frames = frames.saturating_add(1);
                     bytes = bytes.saturating_add(written as u64);
                 }
-                Err(error) if shared.is_closed() => {
-                    let _ = error;
-                    break;
-                }
+                Err(error) if shared.is_closed() || is_peer_disconnect(&error) => break,
                 Err(error) => return Err(format!("media write failed: {error}")),
             }
         }
@@ -1115,14 +1112,27 @@ pub fn connect_media(
     Ok((stream, keys, session_id))
 }
 
+fn is_peer_disconnect(error: &MediaError) -> bool {
+    matches!(
+        error,
+        MediaError::Io(io_error)
+            if matches!(
+                io_error.kind(),
+                io::ErrorKind::BrokenPipe
+                    | io::ErrorKind::ConnectionReset
+                    | io::ErrorKind::ConnectionAborted
+            )
+    )
+}
+
 pub fn read_media_record(
     stream: &mut TcpStream,
     cipher: &mut RecordCipher,
-) -> Result<Option<crate::media_transport::MediaRecord>, String> {
+) -> Result<Option<crate::media_transport::MediaRecord>, MediaError> {
     match read_record(stream, cipher) {
         Ok(record) => Ok(Some(record)),
         Err(MediaError::Truncated) => Ok(None),
-        Err(error) => Err(format!("media read failed: {error}")),
+        Err(error) => Err(error),
     }
 }
 
@@ -1261,6 +1271,20 @@ mod tests {
         assert!(options.validate().is_err());
         options.fps = DEFAULT_FPS;
         assert!(options.validate().is_ok());
+    }
+
+    #[test]
+    fn media_sender_treats_peer_disconnect_as_normal_shutdown() {
+        for kind in [
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::ConnectionAborted,
+        ] {
+            assert!(is_peer_disconnect(&MediaError::Io(io::Error::from(kind))));
+        }
+        assert!(!is_peer_disconnect(&MediaError::Io(io::Error::from(
+            io::ErrorKind::PermissionDenied
+        ))));
     }
 
     #[test]
