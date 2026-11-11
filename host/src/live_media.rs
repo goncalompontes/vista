@@ -317,7 +317,7 @@ fn capture_loop(shared: &SharedMedia, stop: &AtomicBool, fps: u32) -> Result<(),
     }
     let encoder = capabilities
         .selected
-        .ok_or("no usable H.264 encoder is available")?;
+        .ok_or_else(|| crate::media::encoder_unavailable_remediation(&capabilities))?;
     let mut pipeline = EncoderPipeline::new(encoder)?;
     let frame_interval = Duration::from_micros(1_000_000 / u64::from(fps));
     let started = Instant::now();

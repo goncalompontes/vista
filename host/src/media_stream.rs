@@ -10,7 +10,7 @@
 //! It does not capture desktop pixels, use the portal, or send media to iOS.
 
 use crate::{
-    media::{H264Encoder, decoder_candidates, probe_encoders},
+    media::{H264Encoder, decoder_candidates, encoder_unavailable_remediation, probe_encoders},
     media_transport::{MediaError, MediaRecord, media_cipher, read_record, write_record},
     protocol::{
         ClientSession, Envelope, HostSession, HostState, MAX_CONTROL_FRAME_BYTES, PairingSecret,
@@ -272,7 +272,9 @@ fn send_frames(
     if !capabilities.h264_parser {
         return Err("GStreamer h264parse is unavailable".into());
     }
-    let encoder = capabilities.selected.ok_or("no usable H.264 encoder")?;
+    let encoder = capabilities
+        .selected
+        .ok_or_else(|| encoder_unavailable_remediation(&capabilities))?;
     let mut pipeline = build(&producer_description(encoder, frames))?;
     let started = Instant::now();
     let result = (|| {

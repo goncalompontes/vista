@@ -66,6 +66,22 @@ pub fn probe_encoders() -> Result<EncoderCapabilities, String> {
     })
 }
 
+/// Actionable explanation for an environment where GStreamer cannot encode
+/// H.264. The capture and synthetic paths share it so operators see the same
+/// package remedy instead of a bare "no encoder" failure.
+pub fn encoder_unavailable_remediation(capabilities: &EncoderCapabilities) -> String {
+    if !capabilities.h264_parser {
+        return "no usable H.264 encoder: GStreamer h264parse is missing; \
+                install the GStreamer bad plugins (gst-plugins-bad on Arch) and \
+                re-run `vista-host encoders --json`"
+            .into();
+    }
+    "no usable H.264 encoder: install x264enc (gst-plugins-ugly) or \
+     nvh264enc/openh264enc (gst-plugins-bad), then re-run \
+     `vista-host encoders --json`"
+        .into()
+}
+
 fn select_encoder(nvidia: bool, x264: bool, openh264: bool, parser: bool) -> Option<H264Encoder> {
     if !parser {
         return None;
@@ -333,6 +349,33 @@ mod tests {
             ..caps
         };
         assert!(codec_candidates(&no_encoder).is_empty());
+    }
+
+    #[test]
+    fn encoder_remediation_names_a_package_and_the_probe_command() {
+        let capabilities = EncoderCapabilities {
+            nvidia: false,
+            x264: false,
+            openh264: false,
+            h264_parser: true,
+            decoder_available: true,
+            selected: None,
+        };
+        let message = encoder_unavailable_remediation(&capabilities);
+        assert!(message.contains("gst-plugins-ugly"), "{message}");
+        assert!(message.contains("gst-plugins-bad"), "{message}");
+        assert!(message.contains("vista-host encoders --json"), "{message}");
+
+        let without_parser = EncoderCapabilities {
+            h264_parser: false,
+            ..capabilities
+        };
+        let parser_message = encoder_unavailable_remediation(&without_parser);
+        assert!(parser_message.contains("h264parse"), "{parser_message}");
+        assert!(
+            parser_message.contains("gst-plugins-bad"),
+            "{parser_message}"
+        );
     }
 
     #[test]

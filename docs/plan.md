@@ -1,9 +1,10 @@
 # Vista delivery plan
 
-Status as of **2026-11-09** (main `f031600`). The ten increments below were
-implemented, merged and verified; Rust host and iOS client CI are green on
-`main`. This document converts the milestone checklist in
-[roadmap.md](roadmap.md) into an ordered, dependency-aware sequence.
+Status as of **2026-11-11**. The ten baseline increments and the experimental
+end-to-end MVP (PR #92) are merged; Rust host, iOS simulator and Linux
+`VistaCore` CI are green on `main`. This document converts the milestone
+checklist in [roadmap.md](roadmap.md) into an ordered, dependency-aware
+sequence.
 
 Related: [architecture](architecture.md), [protocol](protocol.md),
 [Sill source map](sill-reference.md), and open issues
@@ -42,14 +43,23 @@ Implemented and tested in the repository:
   sheet, live window catalog and VideoToolbox stream view with a synthetic
   self-test; Android Skip APK preview.
 
+Demonstrated on 2026-11-11 with the Rust reference client (see
+[e2e-verification.md](e2e-verification.md)):
+
+- A real desktop capture encoded to H.264 and delivered over the authenticated
+  media connection: 448 frames / 30 s at 1920x1080, plus two target-kind
+  switches in one host session.
+
 Not yet demonstrated anywhere:
 
-- An action or input event reaching a real desktop through the transport.
-- A real host-to-client media connection (the media codec is exercised only by
-  the two-process synthetic diagnostic; the client stream view has no live feed).
-- Indefinite streaming, interactive revocation, congestion control, discovery,
-  or isolated application sessions.
-- Any client-side network connection, pairing, decode or input.
+- An action or input event reaching a real desktop through the transport. The
+  dispatcher, lease and injector are unit-tested; no end-to-end run has moved a
+  real pointer or typed real text.
+- Native-client playback beyond the 2026-11-10 iOS run recorded in the README:
+  no sustained iOS session, no Android runtime playback, no decoder recovery
+  evidence from a real device.
+- Indefinite streaming, interactive revocation, congestion control, packet-loss
+  recovery, discovery, or isolated application sessions.
 - Independent application sessions.
 
 ## Sequencing rules
@@ -160,19 +170,35 @@ client cannot see or affect the host desktop.
 | VideoToolbox decode + stream view | #54 | merged; iOS CI green |
 | Rust host CI | #49 | merged and green on `main` |
 
+## Executed increments (2026-11-11)
+
+| Increment | PR | State |
+|---|---|---|
+| Experimental end-to-end MVP (streaming, catalog, target selection, computer-use) | #92 | merged; Rust/iOS CI green |
+| Live input bound to target-scoped control leases | #90 | merged |
+| Niri JSON IPC provider instead of CLI subprocesses | #88 | merged |
+| Portal source identity boundary (picker-only) | #82 | merged |
+| CSR/mTLS enrollment conformance profile (spec only) | #83 | merged |
+| Client interaction primitives | #85 | merged |
+| Client README reconciled with MVP status | #91 | merged |
+| License and Niri IPC audit | #84 | merged |
+| Host platform-neutral architecture docs | #67 | merged |
+| Canonical protocol, security and client specs | #76 | merged (design only) |
+| Generated-source drift + Linux `VistaCore` CI gates | #94 | merged; green |
+| Bounded media receive session + decoder seam | #95 | open |
+| Encoder diagnostics + reference-client end-to-end evidence | this change | open |
+
 ### Next steps
 
-1. Wire the real host media path into the client stream view (the current
-   `media_transport` is exercised by the synthetic two-process diagnostic only).
-2. Connect the capability snapshot/actions to the client UI and native input
-   injection; #37/#47 currently prove this over the listener with a deterministic
-   backend.
-3. Add incremental catalog refresh and reconnect handling.
-4. Continue M3 input/keyboard/audio/clipboard, then M4 independent sessions and
+1. Prove one action and one input event reaching a real desktop through the
+   transport, with an opt-in run that states exactly what moved.
+2. Reconcile the Android client with the shared core: the `VistaCore` sources are
+   `#if !SKIP`-guarded, so the Skip build transpiles the UI but not the protocol
+   types, and a clean transpile currently needs a documented path fix.
+3. Add incremental catalog refresh and reconnect/backpressure handling.
+4. Make the Android build a CI gate once the transpile is reproducible.
+5. Continue M3 input/keyboard/audio/clipboard, then M4 independent sessions and
    M5 packaging/reliability.
-
-Parallel, low-risk: Android capability-controls screen (#34), launcher icon, and
-Sill parity review.
 
 ## Definition of done (every increment)
 

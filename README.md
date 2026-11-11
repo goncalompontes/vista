@@ -12,6 +12,14 @@ H.264 to the client's VideoToolbox view. On 2026-11-10, a vphone iOS VM paired
 with the host and displayed video for the active desktop and a virtual desktop
 in the same session. Selecting an individual window subsequently showed a
 stale frame; sustained playback and target switching still need investigation.
+
+That stale-frame cause is now covered by tests: a stream discontinuity clears
+cached SPS/PPS and flushes queued sample buffers. The same cycle was recorded
+against the Rust reference client instead of an emulator: real Niri capture
+reached the client as authenticated H.264 at 1920×1080 for 30 seconds (448
+frames), and switching between the `desktop` and `workspace` targets restarted
+the producer cleanly. See [end-to-end verification](docs/e2e-verification.md)
+for the exact commands and numbers, and for what that run does not prove.
 Keyboard/pointer input and host actions are implemented but have not yet been
 verified end to end through the iOS UI. See the [test record and next steps](integrations/vista-computer-use/docs/END_TO_END.md#what-was-actually-exercised).
 
