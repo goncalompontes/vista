@@ -1222,9 +1222,8 @@ fn serve_command(args: &[&str], json: bool) -> Result<(), NiriError> {
             .map_err(|_| NiriError::InvalidArgument("--fps must be an integer".into()))?;
     }
     let grants = options.grants;
-    let (service, invite) = vista_host::host_service::HostService::bind(options).map_err(|error| {
-        NiriError::Unavailable(format!("cannot start host service: {error}"))
-    })?;
+    let (service, invite) = vista_host::host_service::HostService::bind(options)
+        .map_err(|error| NiriError::Unavailable(format!("cannot start host service: {error}")))?;
     if json {
         println!("{}", serde_json::to_string(&invite)?);
         io::stdout().flush()?;
@@ -1274,7 +1273,15 @@ fn parse_stream_target(value: &str) -> Result<protocol::StreamTarget, NiriError>
 fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
     check_known_arguments(
         args,
-        &["--connect", "--secret-hex", "--target", "--frames", "--h264", "--pointer", "--text"],
+        &[
+            "--connect",
+            "--secret-hex",
+            "--target",
+            "--frames",
+            "--h264",
+            "--pointer",
+            "--text",
+        ],
         &["--json", "--allow-input"],
     )?;
     let connect = option(args, "--connect")
@@ -1282,9 +1289,8 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
     let address: SocketAddr = connect
         .parse()
         .map_err(|_| NiriError::InvalidArgument("--connect must be an IP:port address".into()))?;
-    let secret_hex = option(args, "--secret-hex").ok_or_else(|| {
-        NiriError::InvalidArgument("live-client requires --secret-hex".into())
-    })?;
+    let secret_hex = option(args, "--secret-hex")
+        .ok_or_else(|| NiriError::InvalidArgument("live-client requires --secret-hex".into()))?;
     let secret = protocol::PairingSecret::from_hex(secret_hex)
         .map_err(|error| NiriError::InvalidArgument(format!("invalid --secret-hex: {error}")))?;
     let target = parse_stream_target(
@@ -1298,7 +1304,9 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
         None => 60,
     };
     if frames == 0 {
-        return Err(NiriError::InvalidArgument("--frames must be positive".into()));
+        return Err(NiriError::InvalidArgument(
+            "--frames must be positive".into(),
+        ));
     }
     let h264_path = option(args, "--h264");
     let allow_input = args.contains(&"--allow-input");
@@ -1318,11 +1326,9 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
         .media
         .clone()
         .ok_or_else(|| NiriError::Unavailable("host did not announce a media endpoint".into()))?;
-    let (mut media_stream, keys, session_id) = vista_host::host_service::connect_media(
-        SocketAddr::new(address.ip(), media.port),
-        &secret,
-    )
-    .map_err(|error| NiriError::Unavailable(format!("media connect: {error}")))?;
+    let (mut media_stream, keys, session_id) =
+        vista_host::host_service::connect_media(SocketAddr::new(address.ip(), media.port), &secret)
+            .map_err(|error| NiriError::Unavailable(format!("media connect: {error}")))?;
     let mut cipher = vista_host::media_transport::media_cipher(
         keys.host_to_client(),
         &session_id,
@@ -1361,9 +1367,7 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
                     let event = capability::InputEvent::PointerAbsolute {
                         x: 0.5,
                         y: 0.5,
-                        geometry_epoch: client
-                            .last_geometry_epoch
-                            .unwrap_or(1),
+                        geometry_epoch: client.last_geometry_epoch.unwrap_or(1),
                     };
                     let _ = client.send_input(event);
                     if let Some(text) = option(args, "--text") {
@@ -1426,7 +1430,11 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
             bytes,
             width,
             height,
-            if encoder.is_empty() { "unknown encoder" } else { &encoder },
+            if encoder.is_empty() {
+                "unknown encoder"
+            } else {
+                &encoder
+            },
             elapsed.as_millis()
         );
         if let Some(path) = h264_path {
