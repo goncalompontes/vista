@@ -14,8 +14,8 @@ use crate::catalog::CatalogUpdate;
 use crate::session::{FrameGeometry, SessionError, SessionToken, StreamSession};
 use serde::Serialize;
 use std::{
-    io::{BufRead, BufReader},
-    process::{Child, Command, Stdio},
+    io::BufRead,
+    os::unix::net::UnixStream,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -205,23 +205,20 @@ impl WindowLifecycle {
 pub struct WindowWatcher {
     cancelled: Arc<AtomicBool>,
     reason: Arc<Mutex<Option<&'static str>>>,
-    child: Child,
+    stream: UnixStream,
     handle: Option<JoinHandle<()>>,
 }
 
 impl WindowWatcher {
     pub fn start(window_id: u64) -> Result<Self, String> {
         let generation = crate::capability::niri_generation(window_id);
-        let mut child = Command::new("niri")
-            .args(["msg", "--json", "event-stream"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| format!("cannot start Niri window watcher: {error}"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "Niri window watcher stdout was not available".to_string())?;
+        let reader = crate::niri_ipc::NiriIpc::from_env()
+            .and_then(|ipc| ipc.event_stream())
+            .map_err(|error| format!("cannot connect Niri event stream: {error}"))?;
+        let stream = reader
+            .get_ref()
+            .try_clone()
+            .map_err(|error| format!("cannot retain Niri event stream: {error}"))?;
         let cancelled = Arc::new(AtomicBool::new(false));
         let reason = Arc::new(Mutex::new(None));
         let flag = cancelled.clone();
@@ -234,7 +231,7 @@ impl WindowWatcher {
                 flag.store(true, Ordering::Release);
                 return;
             };
-            for line in BufReader::new(stdout).lines() {
+            for line in reader.lines() {
                 let Ok(line) = line else { break };
                 let Ok(updates) = catalog.apply_line(&line) else {
                     continue;
@@ -261,7 +258,7 @@ impl WindowWatcher {
         Ok(Self {
             cancelled,
             reason,
-            child,
+            stream,
             handle: Some(handle),
         })
     }
@@ -277,7 +274,7 @@ impl WindowWatcher {
 
 impl Drop for WindowWatcher {
     fn drop(&mut self) {
-        let _ = self.child.kill();
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }

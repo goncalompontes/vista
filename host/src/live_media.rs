@@ -186,9 +186,12 @@ impl SharedMedia {
         if !state.started {
             return None;
         }
-        state
-            .geometry
-            .map(|geometry| (geometry, state.encoder.clone().unwrap_or_else(|| "unknown".into())))
+        state.geometry.map(|geometry| {
+            (
+                geometry,
+                state.encoder.clone().unwrap_or_else(|| "unknown".into()),
+            )
+        })
     }
 
     pub fn take_error(&self) -> Option<String> {
@@ -211,11 +214,7 @@ pub struct Producer {
 }
 
 impl Producer {
-    pub fn start(
-        target: StreamTarget,
-        shared: Arc<SharedMedia>,
-        fps: u32,
-    ) -> Result<Self, String> {
+    pub fn start(target: StreamTarget, shared: Arc<SharedMedia>, fps: u32) -> Result<Self, String> {
         let fps = fps.clamp(1, MAX_FPS);
         let stop = Arc::new(AtomicBool::new(false));
         let producer_stop = stop.clone();
@@ -224,7 +223,8 @@ impl Producer {
         let join = thread::Builder::new()
             .name(format!("vista-capture-{}", target.identifier()))
             .spawn(move || {
-                if let Err(error) = run_producer(producer_target, &producer_shared, &producer_stop, fps)
+                if let Err(error) =
+                    run_producer(producer_target, &producer_shared, &producer_stop, fps)
                 {
                     producer_shared.fail(error);
                 }
@@ -292,21 +292,21 @@ fn run_producer(
 }
 
 fn niri_action(args: &[&str]) -> Result<(), String> {
-    let output = Command::new("niri")
-        .arg("msg")
-        .arg("action")
-        .args(args)
-        .output()
-        .map_err(|error| format!("cannot run niri: {error}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "niri msg action {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-    }
+    use crate::niri_ipc::{Action, NiriIpc};
+
+    let action = match args {
+        ["focus-window", "--id", id] => Action::FocusWindow {
+            id: id.parse().map_err(|_| "invalid window id")?,
+        },
+        ["fullscreen-window"] => Action::FullscreenWindow,
+        ["focus-workspace", index] => Action::FocusWorkspaceIndex {
+            index: index.parse().map_err(|_| "invalid workspace index")?,
+        },
+        _ => return Err("unsupported Niri action".into()),
+    };
+    NiriIpc::from_env()
+        .and_then(|ipc| ipc.request_value(&action.wire()).map(|_| ()))
+        .map_err(|error| error.to_string())
 }
 
 fn capture_loop(shared: &SharedMedia, stop: &AtomicBool, fps: u32) -> Result<(), String> {
@@ -345,8 +345,9 @@ fn capture_loop(shared: &SharedMedia, stop: &AtomicBool, fps: u32) -> Result<(),
                 ..geometry
             };
             let keyframe = keyframe || record_keyframe(&record);
-            let record = MediaRecord::new(record.pts_ns, keyframe, record.discontinuity, record.bytes)
-                .map_err(|error| format!("media record: {error}"))?;
+            let record =
+                MediaRecord::new(record.pts_ns, keyframe, record.discontinuity, record.bytes)
+                    .map_err(|error| format!("media record: {error}"))?;
             shared.push(record, geometry, encoder.element_name());
         }
 
@@ -530,8 +531,7 @@ impl EncoderPipeline {
             (&parser, &capsfilter),
             (&capsfilter, &sink),
         ] {
-            gst::Element::link(left, right)
-                .map_err(|error| format!("pipeline link: {error}"))?;
+            gst::Element::link(left, right).map_err(|error| format!("pipeline link: {error}"))?;
         }
         let appsrc = appsrc
             .downcast::<gst_app::AppSrc>()
@@ -710,8 +710,7 @@ mod tests {
         };
         for value in 0..(QUEUE_DEPTH + 2) {
             shared.push(
-                MediaRecord::new(value as u64, true, false, vec![0, 0, 0, 1, value as u8])
-                    .unwrap(),
+                MediaRecord::new(value as u64, true, false, vec![0, 0, 0, 1, value as u8]).unwrap(),
                 geometry,
                 "test",
             );
@@ -737,7 +736,11 @@ mod tests {
         let epoch = shared.begin();
         shared.push(
             MediaRecord::new(1, true, false, vec![0, 0, 0, 1, 0x65]).unwrap(),
-            StreamGeometry { width: 2, height: 2, epoch },
+            StreamGeometry {
+                width: 2,
+                height: 2,
+                epoch,
+            },
             "test",
         );
         let (record, geometry, _) = shared.next().unwrap();
@@ -748,10 +751,7 @@ mod tests {
     #[test]
     fn target_identifiers_are_stable() {
         assert_eq!(StreamTarget::Desktop.identifier(), "desktop");
-        assert_eq!(
-            StreamTarget::Workspace { id: 4 }.identifier(),
-            "ws4"
-        );
+        assert_eq!(StreamTarget::Workspace { id: 4 }.identifier(), "ws4");
         assert_eq!(StreamTarget::Window { id: 9 }.identifier(), "w9");
     }
 }

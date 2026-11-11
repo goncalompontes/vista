@@ -308,10 +308,7 @@ impl CatalogSnapshot {
         for workspace in &self.workspaces {
             workspace.validate()?;
             if !seen_workspaces.insert(workspace.workspace_id) {
-                return Err(format!(
-                    "duplicate workspace id {}",
-                    workspace.workspace_id
-                ));
+                return Err(format!("duplicate workspace id {}", workspace.workspace_id));
             }
         }
         if let Some(output) = &self.output {

@@ -1629,10 +1629,7 @@ impl ClientSession {
             .ok_or(ProtocolError::SessionMismatch)?;
         let envelope = Envelope::new(
             self.next_client_seq,
-            ControlMessage::StreamStop {
-                v: 1,
-                session_id,
-            },
+            ControlMessage::StreamStop { v: 1, session_id },
         );
         self.next_client_seq = self.next_client_seq.wrapping_add(1);
         Ok(envelope)
@@ -1646,10 +1643,7 @@ impl ClientSession {
             .ok_or(ProtocolError::SessionMismatch)?;
         let envelope = Envelope::new(
             self.next_client_seq,
-            ControlMessage::CatalogRequest {
-                v: 1,
-                session_id,
-            },
+            ControlMessage::CatalogRequest { v: 1, session_id },
         );
         self.next_client_seq = self.next_client_seq.wrapping_add(1);
         Ok(envelope)
@@ -1714,9 +1708,7 @@ impl ClientSession {
     pub fn accept_stream_error(&mut self, envelope: &Envelope) -> Result<String, ProtocolError> {
         self.check_host_sequence(envelope)?;
         match &envelope.body {
-            ControlMessage::StreamError { code, message, .. } => {
-                Ok(format!("{code}: {message}"))
-            }
+            ControlMessage::StreamError { code, message, .. } => Ok(format!("{code}: {message}")),
             other => Err(ProtocolError::InvalidTransition {
                 expected: "stream.error",
                 actual: other.name(),
