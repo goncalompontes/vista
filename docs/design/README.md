@@ -40,3 +40,22 @@ This branch starts from main and does not merge or overwrite either feature bran
 Use fake hosts/producers to build the client and contract first; validate native execution, capture, control scope, and media performance on hardware before promoting capabilities. Keep #3 (security/protocol), #4 (client), #5 (independent sessions), #7 (capabilities) linked. This package alone closes none of those implementation issues.
 
 Use stable semantic IDs and backend adapters. Do not fork UI behavior on OS names; presentation is driven by capabilities, targets and permissions. Native iOS behavior and accessibility remain the client's responsibility.
+
+
+---
+
+## Detailed handoff package (2026-11-09, proposed stacked design branch)
+
+The architecture and implementation plan is being extended with **four sequential design-only deliverables**. These files contain reviewed-source evidence and implementation candidates, not a claim of compiled schema, security audit, native runtime tests or completed UX.
+
+1. **[Canonical protocol specification](canonical-protocol-spec.md)**; [draft schema](wire/vista-v1.draft.proto) and [candidate wire fixtures](wire/golden-v1.json). Feature/version negotiation, host-independent IDs, channel semantics, error codes, consent/source identity, request idempotency and cross-language tests. Tracked by #56.
+2. **[Security architecture and threat model](security-threat-model.md)**. Host pin and enrolled client identity, TLS/DTLS signaling linkage, explicit one-use pairing, independent desktop authorization, revoke ordering, attacker fixtures and security review blockers. Tracked by #59.
+3. **[Host libraries and protocol reuse evaluation](adapter-library-evaluation.md)**. Document-backed candidates: ashpd, lamco-portal, Niri IPC licensing, generic portal backend, EIS/reis, GStreamer webrtcbin/webrtcsink, Weston PipeWire and future X11. No implementation dependency changed; worker spikes and #73 license decision required. Tracked by #57/#58/#60/#69/#70/#72.
+4. **[Native client interaction specification](client-experience-implementation-spec.md)** and [fake-host reducer fixtures](client-state-fixtures.json). Capability-only UI, viewer-only and picker-only flows, input scope, gesture precedence, coordinate mapping, keyboard/IME, clipboard privacy, accessibility and iOS/Android parity. Tracked by #4/#7/#34/#74/#75.
+
+This package is intentionally stacked on [host-portability PR #67](https://github.com/goncalompontes/vista/pull/67). Accept ADR 0002 and confirm cross-domain semantics before treating these drafts as binding. Existing prototype design and implementation claims remain historical until #64.
+
+
+## Follow-up technical architecture review (2026-11-09)
+
+[Review findings and decision gates](../reviews/2026-11-09-architecture-gates.md) conditionally endorse provider/permission/source boundaries and enumerate runtime/schema/security and license proof still required. [ADR 0003](../adr/0003-device-identity-enrollment.md) proposes restricted QR-pinned TLS + PKCS#10 CSR + issued X.509 client certificate + paired mTLS signaling; #77 must test real Rust/iOS/Android TLS identity behavior. [ADR 0004](../adr/0004-license-and-niri-ipc-policy.md) recommends Apache-2.0 and an independently authored direct Niri JSON socket provider, pending explicit license decision #73. Draft Protobuf verification is split into #78. No `LICENSE` change and no production security acceptance is implied.
