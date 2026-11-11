@@ -126,8 +126,7 @@ impl InputInjector {
                 let width = geometry.width.max(1);
                 let height = geometry.height.max(1);
                 let px = ((x * f64::from(width - 1)).round()).clamp(0.0, f64::from(width - 1));
-                let py =
-                    ((y * f64::from(height - 1)).round()).clamp(0.0, f64::from(height - 1));
+                let py = ((y * f64::from(height - 1)).round()).clamp(0.0, f64::from(height - 1));
                 self.run(&[
                     "mousemove".into(),
                     "--absolute".into(),
@@ -181,10 +180,7 @@ impl InputInjector {
             InputEffect::Key { usage, pressed, .. } => {
                 let code = hid_usage_to_evdev(usage)
                     .ok_or_else(|| format!("unsupported HID usage {usage:#04x}"))?;
-                self.run(&[
-                    "key".into(),
-                    format!("{code}:{}", u8::from(pressed)),
-                ])
+                self.run(&["key".into(), format!("{code}:{}", u8::from(pressed))])
             }
             InputEffect::Text { text } => {
                 if text.is_empty() {
@@ -253,8 +249,8 @@ impl Drop for InputInjector {
 /// guessed.
 pub fn hid_usage_to_evdev(usage: u16) -> Option<u16> {
     const LETTERS: [u16; 26] = [
-        30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38, 50, 49, 24, 25, 16, 19, 31, 20, 22, 47,
-        17, 45, 21, 44,
+        30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38, 50, 49, 24, 25, 16, 19, 31, 20, 22, 47, 17,
+        45, 21, 44,
     ];
     const DIGITS: [u16; 10] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
     const FUNCTIONS: [u16; 12] = [59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 87, 88];
@@ -330,5 +326,4 @@ mod tests {
         assert_eq!(normalized_to_pixels(1.0, 1.0, 1920, 1080), (1919, 1079));
         assert_eq!(normalized_to_pixels(2.0, -1.0, 100, 50), (99, 0));
     }
-
 }

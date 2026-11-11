@@ -126,7 +126,9 @@ impl HostService {
         options.validate()?;
         let secret = match options.secret.clone() {
             Some(secret) => secret,
-            None => PairingSecret::generate().map_err(|error| format!("pairing secret: {error}"))?,
+            None => {
+                PairingSecret::generate().map_err(|error| format!("pairing secret: {error}"))?
+            }
         };
         let listener = TcpListener::bind(options.listen)
             .map_err(|error| format!("cannot bind control listener: {error}"))?;
@@ -177,12 +179,7 @@ impl HostService {
                 Err(error) => return Err(format!("control accept failed: {error}")),
             };
             eprintln!("vista-host: client connected from {peer}");
-            match serve_client(
-                stream,
-                secret.clone(),
-                &self.options,
-                self.injector.clone(),
-            ) {
+            match serve_client(stream, secret.clone(), &self.options, self.injector.clone()) {
                 Ok(report) => {
                     let json = serde_json::to_string(&report).unwrap_or_else(|_| "{}".into());
                     println!("{json}");
@@ -221,12 +218,7 @@ impl Wire {
         })
     }
 
-    fn enable(
-        &mut self,
-        read: RecordCipher,
-        write: RecordCipher,
-        read_limit: usize,
-    ) {
+    fn enable(&mut self, read: RecordCipher, write: RecordCipher, read_limit: usize) {
         self.read = Some(read);
         self.write = Some(write);
         self.read_limit = read_limit;
@@ -249,15 +241,13 @@ impl Wire {
             let plaintext = cipher
                 .open(body)
                 .map_err(|error| format!("control open failed: {error}"))?;
-            Ok(Some(
-                serde_json::from_slice(&plaintext)
-                    .map_err(|error| format!("control decode failed: {error}"))?,
-            ))
+            Ok(Some(serde_json::from_slice(&plaintext).map_err(
+                |error| format!("control decode failed: {error}"),
+            )?))
         } else {
-            Ok(Some(
-                Envelope::decode(&frame)
-                    .map_err(|error| format!("control decode failed: {error}"))?,
-            ))
+            Ok(Some(Envelope::decode(&frame).map_err(|error| {
+                format!("control decode failed: {error}")
+            })?))
         }
     }
 
@@ -272,7 +262,10 @@ impl Wire {
                 Ok(count) => self.read_buffer.extend_from_slice(&chunk[..count]),
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error)
-                    if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
                 {
                     return Ok(false);
                 }
@@ -685,7 +678,11 @@ fn attach_target(
     };
     let generation = match target {
         StreamTarget::Window { id } => crate::capability::niri_generation(id),
-        _ => format!("{}#{}", CatalogSnapshot::current_generation(), target.kind()),
+        _ => format!(
+            "{}#{}",
+            CatalogSnapshot::current_generation(),
+            target.kind()
+        ),
     };
     let target_ref = TargetRef::new(target.identifier(), generation)
         .map_err(|error| format!("target: {error}"))?;
@@ -820,8 +817,7 @@ impl MediaEndpoint {
             .set_write_timeout(Some(IO_TIMEOUT))
             .map_err(|error| format!("media write timeout: {error}"))?;
         let mut host = self.host;
-        let (keys, session_id) =
-            media_stream::host_handshake(&mut stream, &mut host, self.now)?;
+        let (keys, session_id) = media_stream::host_handshake(&mut stream, &mut host, self.now)?;
         let control_stream = stream
             .try_clone()
             .map_err(|error| format!("cannot clone media stream: {error}"))?;
