@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Mirror the canonical iOS/portable sources into the Skip module.
 # Run this after changing client/ios/Vista or client/core/Sources/VistaCore.
+# SkipEntry.swift is intentionally Skip-specific and is preserved verbatim.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"

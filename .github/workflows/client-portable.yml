@@ -1,0 +1,56 @@
+name: Portable client checks
+
+on:
+  push:
+    paths:
+      - "client/core/**"
+      - "client/ios/Vista/Views/**"
+      - "client/android/Sources/Vista/**"
+      - "client/android/sync-sources.sh"
+      - ".github/workflows/client-portable.yml"
+  pull_request:
+    paths:
+      - "client/core/**"
+      - "client/ios/Vista/Views/**"
+      - "client/android/Sources/Vista/**"
+      - "client/android/sync-sources.sh"
+      - ".github/workflows/client-portable.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portable-client-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-source-drift:
+    name: Android generated-source drift
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Regenerate in an isolated temporary checkout and compare
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          git archive HEAD | tar -x -C "$tmp"
+          bash "$tmp/client/android/sync-sources.sh"
+          diff -ru \
+            "$GITHUB_WORKSPACE/client/android/Sources/Vista" \
+            "$tmp/client/android/Sources/Vista"
+
+  swift-core-linux:
+    name: VistaCore tests (Linux, Swift 6.0)
+    runs-on: ubuntu-24.04
+    container:
+      image: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run portable package tests on Linux
+        run: swift test --package-path client/core
+
+# Android Skip/Gradle compilation is deliberately not represented as a passing
+# CI gate yet. See client/android/README.md for the reproducible blocker and
+# the exact evidence required before enabling a macOS runner job.

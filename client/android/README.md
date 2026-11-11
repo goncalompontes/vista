@@ -77,6 +77,32 @@ Allow TCP port 7443 through the host firewall, then enter the host IP, port
 and 64-character pairing secret shown by the listener. Wi-Fi networks with
 client isolation must allow phone-to-host traffic.
 
+## CI verification status
+
+The portable client CI workflow currently provides two deterministic gates:
+
+- **Generated-source drift:** `sync-sources.sh` is run in a temporary checkout
+  created from the commit under test. CI compares the regenerated
+  `Sources/Vista` tree with the committed tree; the repository checkout is never
+  modified. `SkipEntry.swift` is a Skip-specific entry point, not generated from
+  the canonical iOS/core sources, and the sync script preserves it verbatim.
+- **Portable Swift core:** `swift test --package-path client/core` runs in the
+  pinned `swift:6.0` Linux container. This compiles and tests the Foundation/
+  portable package on Linux, not the SwiftUI app or iOS target.
+
+**Android build is not gated yet.** The checked-in `build-android.sh` is a
+Linux-specific path: it invokes `skip export --host-build transpile`, then
+intentionally tolerates the expected non-zero Darwin/Xcode export step only
+when Kotlin output already exists, and finally runs Gradle. That workaround is
+not a valid macOS build command: on macOS the normal Skip export/Xcode path
+must be exercised, and the project does not currently provide a separately
+verified macOS Android build invocation or a pinned/validated macOS Skip tool
+installation for CI. A macOS runner also adds Xcode + Android SDK + Gradle
+setup and minutes to every client change. Rather than claim an untested Android
+build gate, this increment leaves it explicitly ungated. Enable it only after a
+macOS clean-run of the exact Skip export/transpile and Gradle APK build has
+established a stable command sequence and acceptable runtime.
+
 ## Known gaps
 
 - Unsupported SF Symbols and accessibility modifiers are omitted or replaced on
