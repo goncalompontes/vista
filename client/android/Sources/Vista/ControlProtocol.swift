@@ -960,8 +960,13 @@ public enum ControlFraming {
         let json = try JSONEncoder().encode(envelope)
         guard json.count <= maxFrameBytes else { throw WireError.frameTooLarge }
         var data = Data()
-        var length = UInt32(json.count).bigEndian
-        withUnsafeBytes(of: &length) { data.append(contentsOf: $0) }
+        // Big-endian length prefix without pointer APIs, so the shared framing
+        // code transpiles for the Android client as well as iOS.
+        let length = UInt32(json.count)
+        data.append(UInt8(truncatingIfNeeded: length >> 24))
+        data.append(UInt8(truncatingIfNeeded: length >> 16))
+        data.append(UInt8(truncatingIfNeeded: length >> 8))
+        data.append(UInt8(truncatingIfNeeded: length))
         data.append(json)
         return data
     }

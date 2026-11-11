@@ -10,14 +10,14 @@ struct StreamPreviewView: View {
     var streamMessage: String?
     var isStreaming = false
     var inputEnabled = false
-    var geometryEpoch: UInt64 = 1
+    var geometryEpoch: UInt64 = UInt64(1)
     var onInvoke: ((String) -> Void)?
     var onSelect: ((StreamTarget) -> Void)?
     var onStop: (() -> Void)?
     var onInput: ((PortableInputEvent) -> Void)?
 #if !SKIP
     var mediaRecords: [H264AccessUnit] = []
-    var mediaRecordSequence: UInt64 = 0
+    var mediaRecordSequence: UInt64 = UInt64(0)
     var onKeyframeNeeded: (() -> Void)?
 #endif
     @State private var text = ""
