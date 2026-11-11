@@ -362,7 +362,13 @@ class HostControlClient {
                         if (active !== ctx) return@execute
                         if (state.streamReady) InputToken(ctx.id, state.selection, state.geometryEpoch) else null
                     } ?: continue
-                    if (record.discontinuity) synchronized(lock) { event(ctx.id, ClientEvent.Recovering(tag.selection)) }
+                    if (record.discontinuity) synchronized(lock) {
+                        if (active === ctx && state.selection == tag.selection && state.geometryEpoch == tag.geometry) {
+                            // Disabling local control must not leave host keys/buttons held.
+                            cancelLocked(ctx)
+                            event(ctx.id, ClientEvent.Recovering(tag.selection))
+                        }
+                    }
                     decoder.submit(record, tag)
                 }
             } catch (error: Exception) {
