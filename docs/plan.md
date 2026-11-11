@@ -188,6 +188,7 @@ client cannot see or affect the host desktop.
 | Portal and compositor capability probe (passive) | #81 | open |
 | Bounded media receive session + decoder seam | #95 | merged |
 | Encoder diagnostics + reference-client end-to-end evidence | #97 | merged |
+| Reference-client completion and clean-shutdown semantics (real desktop, workspace and window targets) | #98 | merged |
 
 ### Next steps
 
