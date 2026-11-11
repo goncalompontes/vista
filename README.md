@@ -1,6 +1,6 @@
 # Vista
 
-Vista is an open-source native application-streaming platform for Linux hosts and iPhone/iPad clients. It aims to stream **existing Wayland windows** and **independent remote application sessions**, with touch, keyboard, pointer, audio, and clipboard support.
+Vista is an open-source native application-streaming platform for Linux hosts and iPhone/iPad clients. It aims to stream **existing desktop windows** (starting with Wayland) and **independent remote application sessions**, with touch, keyboard, pointer, audio, and clipboard support. Its proposed future host-core architecture is OS-/compositor-neutral while implementation remains Linux-first; see [architecture review PR #67](https://github.com/goncalompontes/vista/pull/67).
 
 Inspired by [Sill](https://github.com/Saffsanity/sill); not a fork or a drop-in Sill backend. For iOS/iPadOS development, use the [upstream Sill source-to-Vista map](docs/sill-reference.md) before reimplementing UI controls.
 
