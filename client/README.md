@@ -188,10 +188,13 @@ Keep the macOS build/test path as an independent verification source.
 `client/android` is a native Kotlin/Jetpack Compose client, not a transpiled
 copy of the SwiftUI views. It builds on Linux with the Gradle wrapper (see
 `client/android/README.md`). It pairs with a host, consumes the live window
-catalog and capability snapshot, and sends authorized semantic actions over the
-same encrypted v1 protocol as iOS. The wire core is checked against the shared
-Rust/Swift pairing vector as JVM tests, and the debug APK is built and tested in
-CI. Live media, native input, audio and clipboard are still separate increments.
+catalog and capability snapshot, sends authorized semantic actions over the same
+encrypted v1 protocol as iOS, plays live host H.264 through `MediaCodec`, and
+forwards touch as portable pointer events. The wire core is checked against the
+shared Rust/Swift pairing vector as JVM tests, and the debug APK is built and
+tested in CI. A headless Android 36 emulator streamed 1920×1080 from a real host
+on 2026-11-11 ([evidence](../docs/android-verification.md)); keyboard/text,
+audio, clipboard and a physical-device run remain.
 
 ## Android device or emulator
 
@@ -218,9 +221,9 @@ pairing flow, but a physical iPhone requires a signed device build: macOS with
 Xcode, an Apple development team, a provisioned `dev.vista.client` bundle ID,
 the first-run local-network permission, and the device trusted by Xcode. The
 Linux `xtool` IPA is useful for the vphone experiment but is not a substitute
-for Apple device signing. Live host video, audio, clipboard and native input
-remain unavailable on both platforms until their transport and permission paths
-are implemented.
+for Apple device signing. Android now receives live host video and pointer input; keyboard/text, audio
+and clipboard remain unimplemented. The iOS client still needs live media and
+input wiring.
 
 ## Building on a Mac
 

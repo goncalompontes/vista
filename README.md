@@ -25,11 +25,14 @@ verified end to end through the iOS UI. See the [test record and next steps](int
 
 The Android client is native Kotlin/Jetpack Compose and speaks the same v1
 control protocol: pairing, encrypted control records, live catalog, capability
-snapshot and semantic actions. Its debug APK builds from a clean tree and its
-wire core is checked against the shared Rust/Swift pairing vector in CI; it is
-the current MVP verification platform. Android live video, input, audio and
-clipboard are the next increment. iOS remains a separate SwiftUI app and is not
-a build dependency of Android.
+snapshot, semantic actions, authenticated H.264 playback through `MediaCodec`
+and touch-to-pointer input. Its debug APK builds from a clean tree and its wire
+core is checked against the shared Rust/Swift pairing vector in CI; it is the
+current MVP verification platform. On 2026-11-11 a headless Android 36 emulator
+streamed 1920×1080 from a real Niri host and the host accepted 12
+touch-derived input events ([evidence](docs/android-verification.md)). Keyboard
+and text input, audio, clipboard and a physical-device run remain. iOS stays a
+separate SwiftUI app and is not a build dependency of Android.
 
 The experimental `vista-host serve` is single-client and has no TLS. Keep it
 on loopback and treat its pairing invite as a secret. Its live capture path

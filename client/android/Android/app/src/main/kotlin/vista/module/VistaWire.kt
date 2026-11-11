@@ -28,6 +28,11 @@ object VistaWire {
     const val MAX_CONTROL_FRAME_BYTES = 64 * 1024
     const val AEAD_TAG_BYTES = 16
 
+    /** Mirrors `media_transport.rs`: 8-byte PTS, one flags byte, then the AU. */
+    const val MEDIA_HEADER_BYTES = 9
+    const val MAX_MEDIA_FRAME_BYTES = 16 * 1024 * 1024
+    const val MAX_MEDIA_RECORD_BYTES = MEDIA_HEADER_BYTES + MAX_MEDIA_FRAME_BYTES + AEAD_TAG_BYTES
+
     const val DIRECTION_CLIENT_TO_HOST = 1
     const val DIRECTION_HOST_TO_CLIENT = 2
 
@@ -133,11 +138,11 @@ object VistaWire {
         output.flush()
     }
 
-    fun readFrame(input: InputStream): ByteArray {
+    fun readFrame(input: InputStream, maxBytes: Int = MAX_CONTROL_FRAME_BYTES + AEAD_TAG_BYTES): ByteArray {
         val header = input.readNBytes(4)
         check(header.size == 4) { "host closed the connection" }
         val length = ByteBuffer.wrap(header).order(ByteOrder.BIG_ENDIAN).int
-        check(length in 1..(MAX_CONTROL_FRAME_BYTES + AEAD_TAG_BYTES)) { "invalid frame length" }
+        check(length in 1..maxBytes) { "invalid frame length" }
         val bytes = input.readNBytes(length)
         check(bytes.size == length) { "truncated frame" }
         return bytes
