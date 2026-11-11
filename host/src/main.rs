@@ -1270,6 +1270,24 @@ fn parse_stream_target(value: &str) -> Result<protocol::StreamTarget, NiriError>
     ))
 }
 
+fn parse_pointer(value: &str) -> Result<(f64, f64), NiriError> {
+    let (x, y) = value.split_once(':').ok_or_else(|| {
+        NiriError::InvalidArgument("--pointer must be X:Y with normalized coordinates".into())
+    })?;
+    let parse = |raw: &str, axis: &str| {
+        raw.parse::<f64>()
+            .map_err(|_| NiriError::InvalidArgument(format!("--pointer {axis} must be a number")))
+    };
+    let x = parse(x, "x")?;
+    let y = parse(y, "y")?;
+    if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
+        return Err(NiriError::InvalidArgument(
+            "--pointer coordinates must be within 0.0..=1.0".into(),
+        ));
+    }
+    Ok((x, y))
+}
+
 fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
     check_known_arguments(
         args,
@@ -1309,6 +1327,10 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
         ));
     }
     let h264_path = option(args, "--h264");
+    let pointer = match option(args, "--pointer") {
+        Some(value) => parse_pointer(value)?,
+        None => (0.5, 0.5),
+    };
     let allow_input = args.contains(&"--allow-input");
     let permissions = protocol::PermissionSet {
         video: true,
@@ -1352,6 +1374,7 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
     let mut height = 0u32;
     let mut encoder = String::new();
     let mut sent_input = false;
+    let mut sent_input_ok = false;
     let started = std::time::Instant::now();
     let deadline = started + std::time::Duration::from_secs(30);
     while received < frames && std::time::Instant::now() < deadline {
@@ -1365,11 +1388,18 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
                 if allow_input && !sent_input && received >= 2 {
                     sent_input = true;
                     let event = capability::InputEvent::PointerAbsolute {
-                        x: 0.5,
-                        y: 0.5,
+                        x: pointer.0,
+                        y: pointer.1,
                         geometry_epoch: client.last_geometry_epoch.unwrap_or(1),
                     };
-                    let _ = client.send_input(event);
+                    let input_sent = match client.send_input(event) {
+                        Ok(()) => true,
+                        Err(error) => {
+                            eprintln!("input rejected: {error}");
+                            false
+                        }
+                    };
+                    sent_input_ok = input_sent;
                     if let Some(text) = option(args, "--text") {
                         let _ = client.send_input(capability::InputEvent::TextCommit {
                             text: text.to_string(),
@@ -1433,6 +1463,7 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
         "encoder": encoder,
         "elapsed_ms": elapsed.as_millis(),
         "h264": h264_path,
+        "pointer": { "x": pointer.0, "y": pointer.1, "sent": sent_input_ok },
         "verified": received > 0,
     });
     if json {
@@ -1570,7 +1601,17 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod live_client_tests {
-    use super::require_frame_count;
+    use super::{parse_pointer, require_frame_count};
+
+    #[test]
+    fn pointer_coordinates_are_normalized_and_validated() {
+        assert_eq!(parse_pointer("0.5:0.25").unwrap(), (0.5, 0.25));
+        assert_eq!(parse_pointer("0:1").unwrap(), (0.0, 1.0));
+        assert!(parse_pointer("0.5").is_err());
+        assert!(parse_pointer("1.5:0.5").is_err());
+        assert!(parse_pointer("-0.1:0.5").is_err());
+        assert!(parse_pointer("left:0.5").is_err());
+    }
 
     #[test]
     fn exact_frame_count_is_required_for_success() {
