@@ -1,13 +1,25 @@
 #if !SKIP
 import Foundation
 
+/// The media endpoint identity announced by the host for one stream session.
+///
+/// A client must not start decoding until the offer has been authenticated and
+/// matched against the pairing it just completed. `generation` increases on the
+/// host whenever a new stream producer starts, so records from a previous
+/// target or reconnect are rejected instead of being decoded as if they were
+/// the current one.
 public struct MediaReceiveOffer: Equatable, Sendable {
     public let pairingID: String
     public let sessionID: String
     public let generation: UInt64
     public let authenticated: Bool
 
-    public init(pairingID: String, sessionID: String, generation: UInt64, authenticated: Bool) {
+    public init(
+        pairingID: String,
+        sessionID: String,
+        generation: UInt64,
+        authenticated: Bool
+    ) {
         self.pairingID = pairingID
         self.sessionID = sessionID
         self.generation = generation
@@ -15,7 +27,7 @@ public struct MediaReceiveOffer: Equatable, Sendable {
     }
 }
 
-public enum MediaReceiveError: Error, Equatable {
+public enum MediaReceiveError: Error, Equatable, CustomStringConvertible {
     case unauthenticatedOffer
     case wrongPairingIdentity
     case wrongSession
@@ -23,39 +35,110 @@ public enum MediaReceiveError: Error, Equatable {
     case invalidGeneration
     case closed
     case decoderFailure
+    case malformedAccessUnit
+    case payloadTooLarge
+
+    public var description: String {
+        switch self {
+        case .unauthenticatedOffer: "media offer was not authenticated"
+        case .wrongPairingIdentity: "media offer belongs to a different pairing"
+        case .wrongSession: "media offer belongs to a different session"
+        case .staleGeneration: "media record belongs to a stale stream generation"
+        case .invalidGeneration: "media generation is invalid"
+        case .closed: "media receive session is closed"
+        case .decoderFailure: "decoder failed and the session is waiting for a keyframe"
+        case .malformedAccessUnit: "access unit is not valid Annex-B"
+        case .payloadTooLarge: "access unit exceeds the bounded media record size"
+        }
+    }
 }
 
-public enum MediaQueuePolicy: Sendable { case dropOldest, dropNewest }
-public enum MediaEnqueueResult: Equatable { case queued, dropped, requestKeyframe }
+/// What to do when the bounded queue is full.
+public enum MediaQueuePolicy: Sendable {
+    /// Discard every queued unit and wait for a fresh IDR. Correct for video:
+    /// decoding a delta after an arbitrary loss produces corrupt output.
+    case dropUntilKeyframe
+}
+
+public enum MediaEnqueueResult: Equatable, Sendable {
+    /// The unit is queued for the decoder.
+    case queued
+    /// The unit was dropped; the host should be asked for a keyframe.
+    case requestKeyframe
+}
 
 /// Platform decoder boundary. Implementations own codec resources; the receive
-/// state machine never depends on MediaCodec, VideoToolbox, or an emulator.
+/// session never depends on MediaCodec or VideoToolbox, which keeps the
+/// backpressure and lifecycle rules testable without a device.
 public protocol H264MediaDecoder: AnyObject {
     func decode(_ accessUnit: H264AccessUnit) throws
     func reset()
     func close()
 }
 
-/// Bounded single-consumer queue and lifecycle guard for an authenticated media
-/// session. Callers serialize access (e.g. on their transport queue/actor).
+/// Deterministic decoder for tests and for integrations without a codec.
+public final class FakeH264MediaDecoder: H264MediaDecoder {
+    public private(set) var decoded: [H264AccessUnit] = []
+    public private(set) var resetCount = 0
+    public private(set) var closeCount = 0
+    public var shouldFail = false
+
+    public init() {}
+
+    public func decode(_ accessUnit: H264AccessUnit) throws {
+        if shouldFail { throw MediaReceiveError.decoderFailure }
+        decoded.append(accessUnit)
+    }
+
+    public func reset() {
+        resetCount += 1
+    }
+
+    public func close() {
+        closeCount += 1
+    }
+}
+
+/// Bounded single-consumer receive queue and lifecycle guard for one
+/// authenticated media session.
+///
+/// The owner must serialize calls, for example on the transport queue or from
+/// an actor. Nothing here blocks: a slow decoder is backpressure applied at
+/// `enqueue`, which drops queued deltas and requests a keyframe rather than
+/// accumulating access units without bound.
 public final class MediaReceiveSession {
     public let offer: MediaReceiveOffer
     public let capacity: Int
     public let policy: MediaQueuePolicy
+
     public private(set) var isClosed = false
     public private(set) var waitingForKeyframe = true
     public private(set) var keyframeRequests = 0
     public private(set) var droppedAccessUnits = 0
+    public private(set) var decodedAccessUnits = 0
+
     private var queue: [H264AccessUnit] = []
     private let decoder: H264MediaDecoder
 
-    public init(offer: MediaReceiveOffer, expectedPairingID: String, expectedSessionID: String,
-                generation: UInt64, capacity: Int = 8, policy: MediaQueuePolicy = .dropOldest,
-                decoder: H264MediaDecoder) throws {
+    public init(
+        offer: MediaReceiveOffer,
+        expectedPairingID: String,
+        expectedSessionID: String,
+        generation: UInt64,
+        capacity: Int = 8,
+        policy: MediaQueuePolicy = .dropUntilKeyframe,
+        decoder: H264MediaDecoder
+    ) throws {
         guard offer.authenticated else { throw MediaReceiveError.unauthenticatedOffer }
-        guard offer.pairingID == expectedPairingID else { throw MediaReceiveError.wrongPairingIdentity }
-        guard offer.sessionID == expectedSessionID else { throw MediaReceiveError.wrongSession }
-        guard generation > 0, offer.generation > 0 else { throw MediaReceiveError.invalidGeneration }
+        guard offer.pairingID == expectedPairingID else {
+            throw MediaReceiveError.wrongPairingIdentity
+        }
+        guard offer.sessionID == expectedSessionID else {
+            throw MediaReceiveError.wrongSession
+        }
+        guard generation > 0, offer.generation > 0 else {
+            throw MediaReceiveError.invalidGeneration
+        }
         guard offer.generation == generation else { throw MediaReceiveError.staleGeneration }
         self.offer = offer
         self.capacity = max(1, capacity)
@@ -65,75 +148,101 @@ public final class MediaReceiveSession {
 
     public var queuedCount: Int { queue.count }
 
+    /// Validate and enqueue one authenticated access unit.
+    ///
+    /// Malformed or oversized payloads close the session: the record boundary
+    /// is no longer trustworthy, so neither are the units that follow it.
     @discardableResult
     public func enqueue(_ unit: H264AccessUnit, generation: UInt64) throws -> MediaEnqueueResult {
         guard !isClosed else { throw MediaReceiveError.closed }
         guard generation == offer.generation else { throw MediaReceiveError.staleGeneration }
-        guard !unit.data.isEmpty, unit.data.count <= SecureMediaFraming.maxAccessUnitBytes else {
+        guard !unit.data.isEmpty else {
             close()
-            throw MediaRecordError.payloadTooLarge
+            throw MediaReceiveError.malformedAccessUnit
+        }
+        guard unit.data.count <= SecureMediaFraming.maxAccessUnitBytes else {
+            close()
+            throw MediaReceiveError.payloadTooLarge
+        }
+        let description: H264UnitDescription
+        do {
+            description = try H264AnnexB.describe(unit)
+        } catch {
+            close()
+            throw MediaReceiveError.malformedAccessUnit
         }
         if unit.discontinuity {
-            queue.removeAll(keepingCapacity: true)
-            waitingForKeyframe = true
-            decoder.reset()
+            dropQueued()
+            requestKeyframe()
         }
         if waitingForKeyframe {
-            let description = try H264AnnexB.describe(unit)
             guard description.isIDR, description.hasParameterSets else {
-                requestKeyframe()
                 return .requestKeyframe
             }
             waitingForKeyframe = false
         }
-        if queue.count == capacity {
-            droppedAccessUnits += 1
-            waitingForKeyframe = true
-            queue.removeAll(keepingCapacity: true)
-            decoder.reset()
+        if queue.count >= capacity {
+            droppedAccessUnits += queue.count + 1
+            dropQueued()
             requestKeyframe()
-            // Never enqueue a delta after loss. An IDR can seed the new queue.
-            guard unit.isKeyframe else { return .requestKeyframe }
-        }
-        if queue.count == capacity {
-            if policy == .dropNewest { return .dropped }
-            queue.removeFirst()
-            droppedAccessUnits += 1
+            guard description.isIDR, description.hasParameterSets else {
+                return .requestKeyframe
+            }
+            waitingForKeyframe = false
         }
         queue.append(unit)
         return .queued
     }
 
-    /// Decode at most one item, allowing the caller to apply backpressure by
-    /// controlling how frequently it drains the queue.
+    /// Decode the oldest queued unit. Returns false when the queue is empty.
+    ///
+    /// A decoder failure discards queued state and requests a keyframe, because
+    /// the decoder generation is no longer known to be valid.
     @discardableResult
     public func decodeNext() throws -> Bool {
         guard !isClosed else { throw MediaReceiveError.closed }
         guard !queue.isEmpty else { return false }
         let unit = queue.removeFirst()
-        do { try decoder.decode(unit); return true }
-        catch {
-            queue.removeAll(keepingCapacity: true)
-            waitingForKeyframe = true
-            decoder.reset()
+        do {
+            try decoder.decode(unit)
+            decodedAccessUnits += 1
+            return true
+        } catch {
+            droppedAccessUnits += queue.count
+            dropQueued()
             requestKeyframe()
             throw MediaReceiveError.decoderFailure
         }
     }
 
+    /// The host signalled a new encoder generation or the consumer reconnected.
     public func markDiscontinuity() throws {
         guard !isClosed else { throw MediaReceiveError.closed }
-        queue.removeAll(keepingCapacity: true)
-        waitingForKeyframe = true
-        decoder.reset()
+        dropQueued()
         requestKeyframe()
     }
 
-    public func stop() { close() }
-    public func disconnect() { close() }
-    public func fail() { close() }
+    public func stop() {
+        close()
+    }
 
-    private func requestKeyframe() { keyframeRequests += 1 }
+    public func disconnect() {
+        close()
+    }
+
+    public func fail() {
+        close()
+    }
+
+    private func dropQueued() {
+        queue.removeAll(keepingCapacity: true)
+        waitingForKeyframe = true
+        decoder.reset()
+    }
+
+    private func requestKeyframe() {
+        keyframeRequests += 1
+    }
 
     private func close() {
         guard !isClosed else { return }
