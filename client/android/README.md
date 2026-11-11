@@ -1,131 +1,111 @@
 # Vista Android client
 
-A native Kotlin/Jetpack Compose client. It speaks the same Vista v1 control
-protocol as the Rust host and the Swift `VistaCore` client; it is not a
-transpiled copy of the SwiftUI views.
+Native Kotlin/Jetpack Compose client for Vista's authenticated v1 host. Android
+is the MVP verification platform; the separate SwiftUI iOS app is not an Android
+build dependency. Merged PR [#103](https://github.com/goncalompontes/vista/pull/103)
+retired the earlier Skip Lite preview.
 
-**Status (2026-11-11):** pairing, the encrypted control record layer, the live
-window catalog, the capability snapshot and semantic `action.invoke` work, and
-the client now plays live host H.264 through `MediaCodec`, forwards touch as
-portable pointer events, maps hardware key events and commits typed text. The debug APK builds from a clean tree, its wire core
-passes the shared Rust/Swift pairing vector as JVM tests, and a headless
-Android 36 x86_64 emulator streamed 1920x1080 from the real host while the host
-accepted 12 touch-derived input events. See
-[Android verification](../../docs/android-verification.md). **Drag/scroll with a held button,
-text commit as a typed run and audio/clipboard are not wired or exercised yet;
-no physical device has been tested.**
+The client provides pairing, an authenticated source library and responsive
+portrait/landscape streaming screens. The UI uses Sill as its reference, with an
+independent Compose implementation; see [Android usability](../../docs/android-usability.md).
+It receives H.264 through MediaCodec, exposes granted capabilities, and supports
+primary tap, held-button drag, long-press secondary click, two-finger scroll,
+physical HID keys and explicitly committed text. Control starts off and stays
+off after backgrounding, recovery and source changes. Display capture and
+shared-desktop input are labelled explicitly, including for window selections.
 
-Earlier revisions transpiled the SwiftUI client with Skip Lite. That path is
-retired: the shared `VistaCore` sources are iOS-only, the clean transpile did
-not type-check (issue #96), and media decode has to be Kotlin anyway. The iOS
-client remains a separate SwiftUI app under `client/ios`.
+Runtime evidence and its limits are in
+[Android verification](../../docs/android-verification.md).
 
 ## Structure
 
-```text
-client/android/
-  README.md
-  build-android.sh                 # SDK/Java environment + Gradle build
-  Android/
-    settings.gradle.kts
-    build.gradle.kts
-    gradle/libs.versions.toml      # AGP, Kotlin, Compose BOM, SDK levels
-    app/
-      build.gradle.kts
-      src/main/AndroidManifest.xml
-      src/main/kotlin/vista/module/
-        MainActivity.kt            # native Compose entry point
-        VistaAndroidRoot.kt        # connection form, video surface, catalog/actions
-        HostControlClient.kt       # control + media connections, input, UI callbacks
-        VistaSession.kt            # pairing handshake and secure/record framing
-        VistaWire.kt               # protocol primitives, JVM-testable
-        MediaRecord.kt             # media record + Annex-B helpers, JVM-testable
-        MediaDecoder.kt            # MediaCodec -> SurfaceView
-      src/test/kotlin/...          # shared-vector conformance tests
-```
+- `Android/app/src/main/kotlin/vista/module/`: native production sources.
+- `ClientState.kt`: immutable state and reducer with connection, selection,
+  geometry and input ownership generations.
+- `VistaAndroidRoot.kt`, `VistaTheme.kt`: pairing, library, stream and controls.
+- `HostControlClient.kt`: authenticated control/media adapters and ordered sender.
+- `VideoSurface.kt`, `VideoGeometry.kt`, `RemoteInput.kt`: fitted video, inverse
+  coordinate mapping, gesture ownership and guarded input.
+- `MediaDecoder.kt`: MediaCodec surface lifecycle; actual rendered frames
+  establish live playback.
+- `VistaSession.kt`, `VistaWire.kt`, `MediaRecord.kt`: v1 crypto and framing.
+- `Android/app/src/test/`: JVM protocol, reducer, geometry and gesture tests.
+- `Android/app/src/androidTest/`: opt-in real-host instrumented UI tests.
+- `testing/`: disposable GTK target, runner and native-effect validator.
 
-Canonical protocol ownership stays with the Rust host and the fixtures in
-`docs/fixtures/`. `VistaWire.kt` is a mirror, and `VistaWireTest` checks it
-against `docs/fixtures/pairing-v1.json`; protocol changes must land in the
-host, the Swift core and this file together.
+Canonical protocol ownership stays with the Rust host and `docs/fixtures/`.
+Rust, Swift and Android consume the shared pairing and stream-scope fixtures.
+Design scenarios in `docs/design/client-state-fixtures.json` are semantic
+expectations; Android covers the supported v1 subset and does not implement the
+future enrollment, clipboard or independent-session cases.
 
 ## Build
 
 Requirements: JDK 17+ (21 recommended), Android SDK 36 with build-tools 36.0.0,
-and network access to the Gradle/Maven repositories on the first run.
+and access to Gradle/Maven repositories on the first run.
 
 ```sh
 export ANDROID_HOME="$HOME/Android/Sdk"
-client/android/build-android.sh          # :app:assembleDebug
-client/android/Android/gradlew -p client/android/Android :app:testDebugUnitTest
+client/android/build-android.sh :app:testDebugUnitTest :app:assembleDebug \
+  :app:assembleDebugAndroidTest
+adb install -r client/android/Android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`build-android.sh` only prepares `ANDROID_HOME`/`PATH`/`JAVA_HOME` and invokes
-the Gradle wrapper; it does not call `xcrun`, Xcode or Skip.
+The wrapper prepares SDK/Java paths and invokes Gradle. It does not call Xcode
+or Skip. CI builds the debug app and test APK and runs JVM tests; it does not
+start a compositor or emulator.
 
-The debug APK is written to
-`client/android/Android/app/build/outputs/apk/debug/app-debug.apk`.
+## Connect to a host
 
-## Run against a host
-
-The client needs the live service (`serve`), not the control-only
-`protocol-serve` listener: only `serve` announces a media endpoint.
+Use the live `serve` listener, which advertises a media endpoint. Loopback is
+sufficient for the Android emulator:
 
 ```sh
-# Live desktop capture with a media endpoint; --allow-input enables touch
-vista-host serve --confirm --listen 0.0.0.0:7443 \
-  --secret-hex <32-byte hex> --allow-remote --allow-input --once --json
-
-adb install -r client/android/Android/app/build/outputs/apk/debug/app-debug.apk
+vista-host serve --confirm --listen 127.0.0.1:7443 --allow-input --json
 adb shell am start -n dev.vista.client/vista.module.MainActivity
 ```
 
-The emulator reaches the host through `10.0.2.2` (host loopback). `adb reverse`
-does not cover the media port, because the host announces it dynamically, so use
-`10.0.2.2` rather than `127.0.0.1` on an emulator.
+Enter `10.0.2.2`, port `7443` and the generated 64-character pairing secret.
+`adb reverse` of 7443 alone does not forward the dynamic media port. The secret
+is masked and never saved in activity state or persistent storage.
 
-For a physical phone, put phone and host on the same LAN, allow TCP 7443 and the
-announced media port through the host firewall, and use the host's LAN address.
-Wi-Fi client isolation blocks this path.
+Choose a source, wait for a rendered frame, then explicitly enable control.
+The Keyboard dialog sends committed text only on request; it keeps local text
+editing separate from physical remote keys. Backgrounding, cancelling a gesture,
+changing video geometry/source or disconnecting releases held input. A source
+change creates fresh control/media connections because v1 media records have no
+target identity; reconnect restores the selected source with control off.
 
-Enter the host address, port and the 64-character pairing secret from the invite
-JSON. After pairing the client selects the `desktop` target automatically; the
-catalog row or the `Desktop` button switches targets, and touch on the video
-area sends absolute pointer events when the host granted input.
+For a physical phone, use a trusted LAN and an explicit remote listener
+(`--listen 0.0.0.0:7443 --allow-remote`). Allow both the listener and announced
+media port. Physical Android hardware has not been verified.
 
-Emulator creation (already present on the development host as `VistaPixel`):
+## Opt-in emulator check
+
+Boot an Android 36 emulator, install the app and instrumentation APK, build
+`vista-host`, and have a working Niri capture/input environment with GTK4 Python
+bindings. Port 7443 must be free. This run focuses a disposable test window and
+injects input: leave host focus there until it exits.
 
 ```sh
-sdkmanager 'platform-tools' 'emulator' 'platforms;android-36' \
-  'build-tools;36.0.0' 'system-images;android-36;google_apis;x86_64'
-echo no | avdmanager create avd -n VistaPixel \
-  -k 'system-images;android-36;google_apis;x86_64' -d pixel_7
-emulator -avd VistaPixel -no-snapshot -no-audio -gpu swiftshader_indirect -no-window
+adb install -r client/android/Android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+XDG_RUNTIME_DIR=/run/user/1000 python3 client/android/testing/run-smoke.py \
+  --niri-socket "$NIRI_SOCKET"
 ```
 
-## CI
+The runner creates private temporary artifacts, transfers a generated invitation
+to the emulator, checks UI/lifecycle/rotation/source switching/host restart and
+validates actual native drag, secondary click, scroll, exact text and modifier
+release. It cleans its own host, injector daemon and test window. Screenshots
+and host logs can contain private desktop content or secrets; do not publish
+them. `--playback-only` checks video recovery without input and is not input
+evidence.
 
-`Portable client checks` runs two jobs on Ubuntu:
+## Remaining work
 
-- **Android build and wire tests:** `./gradlew :app:testDebugUnitTest
-  :app:assembleDebug` on JDK 21 with Android SDK 36.
-- **VistaCore tests:** `swift test --package-path client/core` in a Swift 6.0
-  container.
-
-The Android job does not start an emulator; device/emulator playback evidence is
-recorded separately.
-
-## Known gaps
-
-- Drag with a button held across a gesture, scroll and long-press/secondary
-  click are not wired; the client sends absolute pointer position, the primary
-  button, hardware key presses (letters, digits, arrows, modifiers and common
-  editing keys) and committed text. Only Shift has been exercised end to end.
-- Reconnect retries the control and media connections with a short exponential
-  backoff after a drop; there is still no discovery.
-- A reconnect starts a new host session (new pairing), not a resumed one.
-- Media decode is verified only on an x86_64 emulator; hardware-decoder
-  behaviour on a phone is untested.
-- Audio and clipboard are not implemented.
-- The host capture path still records the whole output (a selected window is
-  focused and fullscreened) and the service is single-client with no TLS.
+Audio, clipboard, discovery, independent sessions, production transport/security
+migration and physical-decoder validation remain separate milestones. The host
+is single-client; it captures the current full output, focuses/fullscreens a
+selected window and injects into the shared desktop. Window selection does not
+establish isolated window capture or input. Reconnect starts a new authenticated
+session rather than resuming the old one.

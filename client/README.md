@@ -1,14 +1,14 @@
-# Vista iOS/iPadOS client
+# Vista clients
 
-A native SwiftUI application shell, with a Foundation-only Swift package for
-model and protocol types. The control protocol, pairing and encrypted record
-layer are implemented and tested; the iOS app can pair with a Vista host, open
-an authenticated control session and display a bounded live window catalog.
-A VideoToolbox-backed stream view and Annex-B/keyframe gate exist, with a
-synthetic encode→decode self-test that runs without a host. **Host media
-transport, audio and input are not wired into the client yet.** The library
-falls back to clearly labelled sample data only when no host catalog has been
-received.
+Android is a native Kotlin/Jetpack Compose client and the current MVP verification
+platform. iOS/iPadOS uses a separate SwiftUI app and the Foundation-only
+`VistaCore` package. Both speak the same authenticated v1 protocol; the Android
+build has no dependency on SwiftUI, Skip or Xcode.
+
+The iOS app has pairing, a live window catalog and a VideoToolbox media path;
+its limited VM playback evidence and remaining input/recovery work are described
+in the [project status](../README.md#status). Portable Swift package tests are
+separate from a native iOS build or runtime check.
 
 ## Structure
 
@@ -185,45 +185,23 @@ Keep the macOS build/test path as an independent verification source.
 
 ## Android client (native Kotlin)
 
-`client/android` is a native Kotlin/Jetpack Compose client, not a transpiled
-copy of the SwiftUI views. It builds on Linux with the Gradle wrapper (see
-`client/android/README.md`). It pairs with a host, consumes the live window
-catalog and capability snapshot, sends authorized semantic actions over the same
-encrypted v1 protocol as iOS, plays live host H.264 through `MediaCodec`, and
-forwards touch as portable pointer events. The wire core is checked against the
-shared Rust/Swift pairing vector as JVM tests, and the debug APK is built and
-tested in CI. A headless Android 36 emulator streamed 1920×1080 from a real host
-on 2026-11-11 ([evidence](../docs/android-verification.md)); drag/scroll, a
-typed text run, audio, clipboard and a physical-device run remain.
+See [Android setup](android/README.md) for the build, native source map and
+opt-in real-host emulator runner. The Android app has pairing, an authenticated
+source library, capability-driven actions, rendered H.264 playback, responsive
+Sill-inspired screens and explicit host control. Basic interaction includes tap,
+held-button drag, secondary click, two-finger scroll, physical keys and committed
+text. Input is fenced by connection/selection/geometry/ownership generations and
+released on cancellation and lifecycle changes.
 
-## Android device or emulator
+Install the debug APK and use `vista-host serve --confirm --listen
+127.0.0.1:7443 --allow-input --json`. On an emulator, connect to `10.0.2.2` so the
+announced dynamic media port is reachable; reversing only 7443 is insufficient.
+For a phone, use an explicitly enabled remote listener and a trusted LAN.
 
-Install the debug APK and point it at a reachable host. For an emulator, forward
-the listener port instead of exposing it on the LAN:
-
-```sh
-adb reverse tcp:7443 tcp:7443
-adb install -r client/android/Android/app/build/outputs/apk/debug/app-debug.apk
-```
-
-For a physical phone, start the host listener on a LAN address with an explicit
-window policy, for example:
-
-```sh
-vista-host protocol-serve --confirm --listen 0.0.0.0:7443 \
-  --allow-remote --window WINDOW_ID --allow-window-actions --catalog --json
-```
-
-Enter the host's address, port and 64-character secret in the Android screen.
-The host firewall must allow TCP 7443, and the phone and host must be on a
-network that permits device-to-device traffic. The iOS client uses the same
-pairing flow, but a physical iPhone requires a signed device build: macOS with
-Xcode, an Apple development team, a provisioned `dev.vista.client` bundle ID,
-the first-run local-network permission, and the device trusted by Xcode. The
-Linux `xtool` IPA is useful for the vphone experiment but is not a substitute
-for Apple device signing. Android now receives live host video and pointer input; keyboard/text, audio
-and clipboard remain unimplemented. The iOS client still needs live media and
-input wiring.
+See [Android verification](../docs/android-verification.md) for observed behavior
+and limits. Physical-device decoding, audio, clipboard, discovery and independent
+sessions remain unverified or unimplemented. iOS uses the same pairing flow but
+requires its own build/signing and validation.
 
 ## Building on a Mac
 
@@ -248,13 +226,10 @@ ignored; regenerate it from `project.yml`.
 
 ## Next integration milestones
 
-1. Define an authenticated host API and pairing handshake, not plaintext host
-   discovery accepted as trust.
-2. Populate the library from a paired Linux host instead of `DemoCatalog`.
-3. Add a real low-latency video decoder and audio pipeline once the host
-   transport exists.
-4. Add touch, pointer, keyboard, clipboard and lifecycle/reconnect behavior,
-   each gated by explicit session permission.
-
-The current preview deliberately does not impersonate a connected or
-streaming session. Before implementing UI controls, consult the [Sill reference and source-to-target map](../docs/sill-reference.md) for native SwiftUI design, gesture, layout and pairing patterns; preserve the source license and attribution where code is reused. Refer to `../docs/roadmap.md` for overall progress.
+Android's emulator-first usability increment is tracked in
+[Android usability](../docs/android-usability.md). Remaining milestones include
+real-host semantic-action verification (#101/#102), throughput/backpressure,
+audio/clipboard, discovery, hardware-decoder evidence and independent sessions.
+Use the [Sill source map](../docs/sill-reference.md) and
+[delivery plan](../docs/plan.md) for scope and provenance. Runtime results are
+platform-specific; the browser preview does not establish native behavior.
