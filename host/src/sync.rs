@@ -666,7 +666,9 @@ pub fn synthetic_sync_recovery_with_external_request(
     if !caps.h264_parser {
         return Err("GStreamer h264parse is unavailable".into());
     }
-    let encoder = caps.selected.ok_or("no usable H.264 encoder")?;
+    let encoder = caps
+        .selected
+        .ok_or_else(|| crate::media::encoder_unavailable_remediation(&caps))?;
     let decoder = decoder_candidates()
         .iter()
         .copied()
