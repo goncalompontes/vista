@@ -1,14 +1,23 @@
 # Vista iOS/iPadOS client
 
 A native SwiftUI application shell, with a Foundation-only Swift package for
-model and protocol types. The control protocol, pairing and encrypted record
-layer are implemented and tested; the iOS app can pair with a Vista host, open
-an authenticated control session and display a bounded live window catalog.
-A VideoToolbox-backed stream view and Annex-B/keyframe gate exist, with a
-synthetic encode→decode self-test that runs without a host. **Host media
-transport, audio and input are not wired into the client yet.** The library
-falls back to clearly labelled sample data only when no host catalog has been
-received.
+model and protocol types. The iOS app implements host pairing, an authenticated
+control session, a bounded live catalog, a separate encrypted H.264 media
+connection, and a VideoToolbox-backed stream view with an Annex-B/keyframe gate.
+An experimental end-to-end MVP has been exercised in the vphone iOS VM: on
+2026-11-10 it paired with the Vista host and displayed live video for the active
+output and a virtual desktop. This is evidence of a working video path, not yet
+of reliable sustained playback or correct target switching: selecting an
+individual window subsequently left a stale frame on screen. Keyboard/pointer
+input and host actions are present in the client/host control path but have not
+been verified end to end through the iOS UI. Audio and clipboard are not
+implemented. The library falls back to clearly labelled sample data only when
+no host catalog has been received.
+
+See the [end-to-end test record](../integrations/vista-computer-use/docs/END_TO_END.md#what-was-actually-exercised)
+for what was exercised and what remains unverified. The host service is
+experimental, single-client and has no TLS; its capture and target-switching
+limitations are described in the [root project status](../README.md#status).
 
 ## Structure
 
@@ -86,7 +95,7 @@ Set `VPHONE_HOME` to point at a different vphone-linux checkout, and
 `VPHONE_CID` if the guest uses a vsock CID other than 3. The helper uses
 vphone-linux's own IPA installer and vphoned diagnostic tooling.
 
-**Current setup status (2026-11-09):** Swift 6.4.1, `xtool 1.24.0` and the
+**Build and simulator setup record (2026-11-09; historical):** Swift 6.4.1, `xtool 1.24.0` and the
 **Xcode 27.2 Darwin SDK** are installed (`xtool sdk status` reports the SDK at
 `~/.swiftpm/swift-sdks/darwin.artifactbundle`). `xtool dev build --ipa`
 produced `client/ios/xtool/Vista.ipa` (about 1.1 MB). The
@@ -96,7 +105,7 @@ the GPU driver was extracted and the firmware prepared/patched; the main
 restore/CFW/first-boot stages are still running. Installing and launching the
 IPA in the guest is the next validation step.
 
-**Current setup status (2026-11-07):** `xtool 1.24.0` was installed
+**Earlier toolchain setup record (2026-11-07):** `xtool 1.24.0` was installed
 as a SHA-256-verified AppImage, extracted under
 `~/.local/opt/xtool-1.24.0/squashfs-root/` and exposed at
 `~/.local/bin/xtool`. This avoids FUSE, which was unavailable inside the
@@ -195,9 +204,11 @@ live media and native input are still separate increments.
 
 ## Physical phone prototype
 
-The current vertical slice is usable on a physical Android phone once the debug
-APK is installed and the phone can reach the Linux host over the LAN. Start the
-host listener on a LAN address with an explicit window policy, for example:
+The current Android control vertical slice is usable on a physical Android
+phone once the debug APK is installed and the phone can reach the Linux host
+over the LAN. This Android milestone is separate from the experimental iOS
+video demonstration recorded in the end-to-end test record. Start the host
+listener on a LAN address with an explicit window policy, for example:
 
 ```sh
 vista-host protocol-serve --confirm --listen 0.0.0.0:7443 \
@@ -207,13 +218,14 @@ vista-host protocol-serve --confirm --listen 0.0.0.0:7443 \
 Enter the host's address, port and 64-character secret in the Android screen.
 The host firewall must allow TCP 7443, and the phone and host must be on a
 network that permits device-to-device traffic. The same pairing flow works from
-the iOS client, but a physical iPhone requires a signed device build: macOS with
-Xcode, an Apple development team, a provisioned `dev.vista.client` bundle ID,
-the first-run local-network permission, and the device trusted by Xcode. The
-Linux `xtool` IPA is useful for the vphone experiment but is not a substitute
-for Apple device signing. Live host video, audio, clipboard and native input
-remain unavailable on both phones until their transport and permission paths
-are implemented.
+the iOS client, and the vphone test record demonstrates host video in the iOS
+VM. That VM result does not validate a physical iPhone or iPad. A physical iOS
+device requires a signed device build: macOS with Xcode, an Apple development
+team, a provisioned `dev.vista.client` bundle ID, the first-run local-network
+permission, and the device trusted by Xcode. The Linux `xtool` IPA is useful for
+the vphone experiment but is not a substitute for Apple device signing. The
+current iOS video path remains experimental; end-to-end input is unverified,
+and audio and clipboard are not implemented.
 
 ## Building on a Mac
 
@@ -236,15 +248,17 @@ macOS runner without device signing and runs `VistaCore` tests. Both
 `ios-simulator` jobs passed on PR #31. The generated `Vista.xcodeproj` is
 ignored; regenerate it from `project.yml`.
 
-## Next integration milestones
+## Remaining end-to-end milestones
 
-1. Define an authenticated host API and pairing handshake, not plaintext host
-   discovery accepted as trust.
-2. Populate the library from a paired Linux host instead of `DemoCatalog`.
-3. Add a real low-latency video decoder and audio pipeline once the host
-   transport exists.
-4. Add touch, pointer, keyboard, clipboard and lifecycle/reconnect behavior,
-   each gated by explicit session permission.
+1. Diagnose stale frames when switching to an individual window, then verify
+   sustained frame delivery and reliable stop/switch/reconnect behavior.
+2. Verify keyboard and pointer input, plus a safe host action, end to end through
+   the iOS UI against a disposable window; keep each action gated by explicit
+   session permission and host capability state.
+3. Implement and validate audio and clipboard transport and their permission
+   paths; neither is currently available.
+4. Validate the signed native iOS app on a physical iPhone/iPad independently
+   of the vphone VM and Swift package tests.
 
 The current preview deliberately does not impersonate a connected or
 streaming session. Before implementing UI controls, consult the [Sill reference and source-to-target map](../docs/sill-reference.md) for native SwiftUI design, gesture, layout and pairing patterns; preserve the source license and attribution where code is reused. Refer to `../docs/roadmap.md` for overall progress.
