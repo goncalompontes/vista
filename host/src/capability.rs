@@ -1571,7 +1571,10 @@ impl ActionBackend for ScopedNiriBackend {
             .filter(|action| match self.scope {
                 NiriTargetScope::Window => matches!(
                     action.id.as_str(),
-                    "window.focus" | "window.close" | "window.maximize.set" | "desktop.workspace.step"
+                    "window.focus"
+                        | "window.close"
+                        | "window.maximize.set"
+                        | "desktop.workspace.step"
                 ),
                 NiriTargetScope::Workspace | NiriTargetScope::Desktop => {
                     matches!(

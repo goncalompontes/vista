@@ -1222,9 +1222,8 @@ fn serve_command(args: &[&str], json: bool) -> Result<(), NiriError> {
             .map_err(|_| NiriError::InvalidArgument("--fps must be an integer".into()))?;
     }
     let grants = options.grants;
-    let (service, invite) = vista_host::host_service::HostService::bind(options).map_err(|error| {
-        NiriError::Unavailable(format!("cannot start host service: {error}"))
-    })?;
+    let (service, invite) = vista_host::host_service::HostService::bind(options)
+        .map_err(|error| NiriError::Unavailable(format!("cannot start host service: {error}")))?;
     if json {
         println!("{}", serde_json::to_string(&invite)?);
         io::stdout().flush()?;
@@ -1274,7 +1273,15 @@ fn parse_stream_target(value: &str) -> Result<protocol::StreamTarget, NiriError>
 fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
     check_known_arguments(
         args,
-        &["--connect", "--secret-hex", "--target", "--frames", "--h264", "--pointer", "--text"],
+        &[
+            "--connect",
+            "--secret-hex",
+            "--target",
+            "--frames",
+            "--h264",
+            "--pointer",
+            "--text",
+        ],
         &["--json", "--allow-input"],
     )?;
     let connect = option(args, "--connect")
@@ -1282,9 +1289,8 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
     let address: SocketAddr = connect
         .parse()
         .map_err(|_| NiriError::InvalidArgument("--connect must be an IP:port address".into()))?;
-    let secret_hex = option(args, "--secret-hex").ok_or_else(|| {
-        NiriError::InvalidArgument("live-client requires --secret-hex".into())
-    })?;
+    let secret_hex = option(args, "--secret-hex")
+        .ok_or_else(|| NiriError::InvalidArgument("live-client requires --secret-hex".into()))?;
     let secret = protocol::PairingSecret::from_hex(secret_hex)
         .map_err(|error| NiriError::InvalidArgument(format!("invalid --secret-hex: {error}")))?;
     let target = parse_stream_target(
@@ -1298,7 +1304,9 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
         None => 60,
     };
     if frames == 0 {
-        return Err(NiriError::InvalidArgument("--frames must be positive".into()));
+        return Err(NiriError::InvalidArgument(
+            "--frames must be positive".into(),
+        ));
     }
     let h264_path = option(args, "--h264");
     let allow_input = args.contains(&"--allow-input");
@@ -1318,11 +1326,9 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
         .media
         .clone()
         .ok_or_else(|| NiriError::Unavailable("host did not announce a media endpoint".into()))?;
-    let (mut media_stream, keys, session_id) = vista_host::host_service::connect_media(
-        SocketAddr::new(address.ip(), media.port),
-        &secret,
-    )
-    .map_err(|error| NiriError::Unavailable(format!("media connect: {error}")))?;
+    let (mut media_stream, keys, session_id) =
+        vista_host::host_service::connect_media(SocketAddr::new(address.ip(), media.port), &secret)
+            .map_err(|error| NiriError::Unavailable(format!("media connect: {error}")))?;
     let mut cipher = vista_host::media_transport::media_cipher(
         keys.host_to_client(),
         &session_id,
@@ -1361,9 +1367,7 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
                     let event = capability::InputEvent::PointerAbsolute {
                         x: 0.5,
                         y: 0.5,
-                        geometry_epoch: client
-                            .last_geometry_epoch
-                            .unwrap_or(1),
+                        geometry_epoch: client.last_geometry_epoch.unwrap_or(1),
                     };
                     let _ = client.send_input(event);
                     if let Some(text) = option(args, "--text") {
@@ -1374,7 +1378,17 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
                 }
             }
             Ok(None) => break,
-            Err(_) => {}
+            Err(vista_host::media_transport::MediaError::Io(error))
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => {
+                client.close("media receive failed");
+                return Err(NiriError::Unavailable(format!(
+                    "media receive failed after {received}/{frames} frames: {error}"
+                )));
+            }
         }
         // Poll the control channel for stream.started and errors.
         if let Ok(Some(envelope)) = client.poll_control() {
@@ -1403,6 +1417,10 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
             }
         }
     }
+    if let Err(error) = require_frame_count(received, frames) {
+        client.close("live client incomplete");
+        return Err(NiriError::Unavailable(error));
+    }
     client.close("live client complete");
     let elapsed = started.elapsed();
     let report = serde_json::json!({
@@ -1426,7 +1444,11 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
             bytes,
             width,
             height,
-            if encoder.is_empty() { "unknown encoder" } else { &encoder },
+            if encoder.is_empty() {
+                "unknown encoder"
+            } else {
+                &encoder
+            },
             elapsed.as_millis()
         );
         if let Some(path) = h264_path {
@@ -1434,6 +1456,16 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
         }
     }
     Ok(())
+}
+
+fn require_frame_count(received: usize, requested: usize) -> Result<(), String> {
+    if received == requested {
+        Ok(())
+    } else {
+        Err(format!(
+            "media stream ended after {received}/{requested} frames before the 30-second deadline"
+        ))
+    }
 }
 
 fn media_stream_command(args: &[&str], json: bool) -> Result<(), NiriError> {
@@ -1533,5 +1565,28 @@ fn main() -> ExitCode {
             eprintln!("vista-host: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod live_client_tests {
+    use super::require_frame_count;
+
+    #[test]
+    fn exact_frame_count_is_required_for_success() {
+        assert_eq!(require_frame_count(8, 8), Ok(()));
+    }
+
+    #[test]
+    fn early_stream_end_reports_received_and_requested_frames() {
+        assert_eq!(
+            require_frame_count(3, 8).unwrap_err(),
+            "media stream ended after 3/8 frames before the 30-second deadline"
+        );
+    }
+
+    #[test]
+    fn zero_frames_is_not_a_successful_stream() {
+        assert!(require_frame_count(0, 1).is_err());
     }
 }

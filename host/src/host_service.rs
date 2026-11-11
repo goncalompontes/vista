@@ -126,7 +126,9 @@ impl HostService {
         options.validate()?;
         let secret = match options.secret.clone() {
             Some(secret) => secret,
-            None => PairingSecret::generate().map_err(|error| format!("pairing secret: {error}"))?,
+            None => {
+                PairingSecret::generate().map_err(|error| format!("pairing secret: {error}"))?
+            }
         };
         let listener = TcpListener::bind(options.listen)
             .map_err(|error| format!("cannot bind control listener: {error}"))?;
@@ -177,12 +179,7 @@ impl HostService {
                 Err(error) => return Err(format!("control accept failed: {error}")),
             };
             eprintln!("vista-host: client connected from {peer}");
-            match serve_client(
-                stream,
-                secret.clone(),
-                &self.options,
-                self.injector.clone(),
-            ) {
+            match serve_client(stream, secret.clone(), &self.options, self.injector.clone()) {
                 Ok(report) => {
                     let json = serde_json::to_string(&report).unwrap_or_else(|_| "{}".into());
                     println!("{json}");
@@ -221,12 +218,7 @@ impl Wire {
         })
     }
 
-    fn enable(
-        &mut self,
-        read: RecordCipher,
-        write: RecordCipher,
-        read_limit: usize,
-    ) {
+    fn enable(&mut self, read: RecordCipher, write: RecordCipher, read_limit: usize) {
         self.read = Some(read);
         self.write = Some(write);
         self.read_limit = read_limit;
@@ -249,15 +241,13 @@ impl Wire {
             let plaintext = cipher
                 .open(body)
                 .map_err(|error| format!("control open failed: {error}"))?;
-            Ok(Some(
-                serde_json::from_slice(&plaintext)
-                    .map_err(|error| format!("control decode failed: {error}"))?,
-            ))
+            Ok(Some(serde_json::from_slice(&plaintext).map_err(
+                |error| format!("control decode failed: {error}"),
+            )?))
         } else {
-            Ok(Some(
-                Envelope::decode(&frame)
-                    .map_err(|error| format!("control decode failed: {error}"))?,
-            ))
+            Ok(Some(Envelope::decode(&frame).map_err(|error| {
+                format!("control decode failed: {error}")
+            })?))
         }
     }
 
@@ -272,7 +262,10 @@ impl Wire {
                 Ok(count) => self.read_buffer.extend_from_slice(&chunk[..count]),
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error)
-                    if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
                 {
                     return Ok(false);
                 }
@@ -685,7 +678,11 @@ fn attach_target(
     };
     let generation = match target {
         StreamTarget::Window { id } => crate::capability::niri_generation(id),
-        _ => format!("{}#{}", CatalogSnapshot::current_generation(), target.kind()),
+        _ => format!(
+            "{}#{}",
+            CatalogSnapshot::current_generation(),
+            target.kind()
+        ),
     };
     let target_ref = TargetRef::new(target.identifier(), generation)
         .map_err(|error| format!("target: {error}"))?;
@@ -820,8 +817,7 @@ impl MediaEndpoint {
             .set_write_timeout(Some(IO_TIMEOUT))
             .map_err(|error| format!("media write timeout: {error}"))?;
         let mut host = self.host;
-        let (keys, session_id) =
-            media_stream::host_handshake(&mut stream, &mut host, self.now)?;
+        let (keys, session_id) = media_stream::host_handshake(&mut stream, &mut host, self.now)?;
         let control_stream = stream
             .try_clone()
             .map_err(|error| format!("cannot clone media stream: {error}"))?;
@@ -844,10 +840,7 @@ impl MediaEndpoint {
                     frames = frames.saturating_add(1);
                     bytes = bytes.saturating_add(written as u64);
                 }
-                Err(error) if shared.is_closed() => {
-                    let _ = error;
-                    break;
-                }
+                Err(error) if shared.is_closed() || is_peer_disconnect(&error) => break,
                 Err(error) => return Err(format!("media write failed: {error}")),
             }
         }
@@ -1067,14 +1060,27 @@ pub fn connect_media(
     Ok((stream, keys, session_id))
 }
 
+fn is_peer_disconnect(error: &MediaError) -> bool {
+    matches!(
+        error,
+        MediaError::Io(io_error)
+            if matches!(
+                io_error.kind(),
+                io::ErrorKind::BrokenPipe
+                    | io::ErrorKind::ConnectionReset
+                    | io::ErrorKind::ConnectionAborted
+            )
+    )
+}
+
 pub fn read_media_record(
     stream: &mut TcpStream,
     cipher: &mut RecordCipher,
-) -> Result<Option<crate::media_transport::MediaRecord>, String> {
+) -> Result<Option<crate::media_transport::MediaRecord>, MediaError> {
     match read_record(stream, cipher) {
         Ok(record) => Ok(Some(record)),
         Err(MediaError::Truncated) => Ok(None),
-        Err(error) => Err(format!("media read failed: {error}")),
+        Err(error) => Err(error),
     }
 }
 
@@ -1097,6 +1103,20 @@ mod tests {
         assert!(options.validate().is_err());
         options.fps = DEFAULT_FPS;
         assert!(options.validate().is_ok());
+    }
+
+    #[test]
+    fn media_sender_treats_peer_disconnect_as_normal_shutdown() {
+        for kind in [
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::ConnectionAborted,
+        ] {
+            assert!(is_peer_disconnect(&MediaError::Io(io::Error::from(kind))));
+        }
+        assert!(!is_peer_disconnect(&MediaError::Io(io::Error::from(
+            io::ErrorKind::PermissionDenied
+        ))));
     }
 
     #[test]
