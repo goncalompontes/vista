@@ -49,6 +49,11 @@ cargo run -- windows --json
 cargo run -- window 5 --json
 cargo run -- watch --json
 cargo run -- capabilities --json
+# Passive portal/compositor metadata, without chooser, pixels, or input:
+cargo run -- desktop-probe --json
+# Re-probe on changes and emit revision/generation updates:
+cargo run -- desktop-probe-watch --json
+# See docs/linux-desktop-probe.md for limitations and desktop test matrix.
 # Backend-agnostic capability/action contract diagnostic; no capture or input injection:
 cargo run -- capability-test --json
 # Session-bound capability/action dispatch through an in-memory paired session:
