@@ -185,8 +185,9 @@ client cannot see or affect the host desktop.
 | Host platform-neutral architecture docs | #67 | merged |
 | Canonical protocol, security and client specs | #76 | merged (design only) |
 | Generated-source drift + Linux `VistaCore` CI gates | #94 | merged; green |
-| Bounded media receive session + decoder seam | #95 | open |
-| Encoder diagnostics + reference-client end-to-end evidence | this change | open |
+| Portal and compositor capability probe (passive) | #81 | open |
+| Bounded media receive session + decoder seam | #95 | merged |
+| Encoder diagnostics + reference-client end-to-end evidence | #97 | merged |
 
 ### Next steps
 
