@@ -1405,17 +1405,41 @@ pub struct SystemCommandRunner;
 
 impl CommandRunner for SystemCommandRunner {
     fn run(&mut self, arguments: &[String]) -> Result<(), String> {
-        let status = std::process::Command::new("niri")
-            .arg("msg")
-            .arg("action")
-            .args(arguments)
-            .status()
-            .map_err(|error| error.to_string())?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("niri msg action exited with {status}"))
-        }
+        use crate::niri_ipc::{Action, NiriIpc};
+        let action = match arguments.first().map(String::as_str) {
+            Some("focus-window") if arguments.get(1).map(String::as_str) == Some("--id") => {
+                Action::FocusWindow {
+                    id: arguments
+                        .get(2)
+                        .ok_or("missing window id")?
+                        .parse()
+                        .map_err(|_| "invalid window id")?,
+                }
+            }
+            Some("close-window") if arguments.get(1).map(String::as_str) == Some("--id") => {
+                Action::CloseWindow {
+                    id: arguments
+                        .get(2)
+                        .ok_or("missing window id")?
+                        .parse()
+                        .map_err(|_| "invalid window id")?,
+                }
+            }
+            Some("focus-workspace") => {
+                let index = arguments
+                    .get(1)
+                    .ok_or("missing workspace index")?
+                    .parse()
+                    .map_err(|_| "invalid workspace index")?;
+                Action::FocusWorkspaceIndex { index }
+            }
+            Some("focus-workspace-up") => Action::FocusWorkspaceUp,
+            Some("focus-workspace-down") => Action::FocusWorkspaceDown,
+            _ => return Err("unsupported Niri action".into()),
+        };
+        NiriIpc::from_env()
+            .and_then(|ipc| ipc.request_value(&action.wire()).map(|_| ()))
+            .map_err(|error| error.to_string())
     }
 }
 

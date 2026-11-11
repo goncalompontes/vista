@@ -292,21 +292,21 @@ fn run_producer(
 }
 
 fn niri_action(args: &[&str]) -> Result<(), String> {
-    let output = Command::new("niri")
-        .arg("msg")
-        .arg("action")
-        .args(args)
-        .output()
-        .map_err(|error| format!("cannot run niri: {error}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "niri msg action {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-    }
+    use crate::niri_ipc::{Action, NiriIpc};
+
+    let action = match args {
+        ["focus-window", "--id", id] => Action::FocusWindow {
+            id: id.parse().map_err(|_| "invalid window id")?,
+        },
+        ["fullscreen-window"] => Action::FullscreenWindow,
+        ["focus-workspace", index] => Action::FocusWorkspaceIndex {
+            index: index.parse().map_err(|_| "invalid workspace index")?,
+        },
+        _ => return Err("unsupported Niri action".into()),
+    };
+    NiriIpc::from_env()
+        .and_then(|ipc| ipc.request_value(&action.wire()).map(|_| ()))
+        .map_err(|error| error.to_string())
 }
 
 fn capture_loop(shared: &SharedMedia, stop: &AtomicBool, fps: u32) -> Result<(), String> {

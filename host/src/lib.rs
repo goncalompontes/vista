@@ -20,6 +20,7 @@ pub mod live_media;
 pub mod media;
 pub mod media_stream;
 pub mod media_transport;
+pub mod niri_ipc;
 pub mod output_capture;
 pub mod pipewire_loopback;
 pub mod portal;
@@ -31,8 +32,7 @@ pub mod transport;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt;
-use std::io::{self, BufReader};
-use std::process::{Command, Stdio};
+use std::io;
 
 #[derive(Debug)]
 pub enum NiriError {
@@ -85,8 +85,8 @@ pub struct Window {
 }
 
 /// Stable fields of Niri's workspace listing. A workspace is the compositor's
-/// virtual desktop; `idx` is the user-facing reference accepted by
-/// `niri msg action focus-workspace`.
+/// virtual desktop; `idx` is the user-facing reference accepted by Niri's
+/// `FocusWorkspace` JSON action.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Workspace {
     pub id: u64,
@@ -142,19 +142,29 @@ pub struct CommandTransport;
 
 impl NiriTransport for CommandTransport {
     fn request(&self, command: &str) -> Result<String, NiriError> {
-        let output = Command::new("niri")
-            .args(["msg", "--json", command])
-            .output()?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(NiriError::Unavailable(format!(
-                "niri msg {command} failed ({}): {}",
-                output.status,
-                stderr.trim()
-            )));
-        }
-        String::from_utf8(output.stdout)
-            .map_err(|error| NiriError::Unavailable(format!("non-UTF8 output: {error}")))
+        use niri_ipc::{NiriIpc, Query};
+        let query = match command {
+            "windows" => Query::Windows,
+            "workspaces" => Query::Workspaces,
+            "outputs" => Query::Outputs,
+            "focused-output" => Query::FocusedOutput,
+            other => {
+                return Err(NiriError::InvalidArgument(format!(
+                    "unsupported Niri query: {other}"
+                )));
+            }
+        };
+        let response = NiriIpc::from_env()
+            .and_then(|ipc| ipc.request_value(&query.wire()))
+            .map_err(|error| NiriError::Unavailable(error.to_string()))?;
+        let key = match query {
+            Query::Windows => "Windows",
+            Query::Workspaces => "Workspaces",
+            Query::Outputs => "Outputs",
+            Query::FocusedOutput => "FocusedOutput",
+        };
+        let payload = response.get(key).cloned().unwrap_or(response);
+        serde_json::to_string(&payload).map_err(Into::into)
     }
 }
 
@@ -246,25 +256,10 @@ impl<T: NiriTransport> Niri<T> {
 /// Follow Niri's event stream and emit a resumable, snapshot-first window catalog.
 /// This intentionally does not request any screen/window pixels.
 pub fn watch_windows(json: bool) -> Result<(), NiriError> {
-    let mut child = Command::new("niri")
-        .args(["msg", "--json", "event-stream"])
-        .stdout(Stdio::piped())
-        .spawn()?;
-    let stdout = child.stdout.take().ok_or_else(|| {
-        NiriError::Unavailable("Niri event stream stdout was not available".into())
-    })?;
-    let result = catalog::relay_events(BufReader::new(stdout), io::stdout().lock(), json);
-    if result.is_err() {
-        let _ = child.kill();
-    }
-    let status = child.wait()?;
-    result?;
-    if !status.success() {
-        return Err(NiriError::Unavailable(format!(
-            "Niri event stream terminated with {status}"
-        )));
-    }
-    Ok(())
+    let reader = niri_ipc::NiriIpc::from_env()
+        .and_then(|ipc| ipc.event_stream())
+        .map_err(|error| NiriError::Unavailable(error.to_string()))?;
+    catalog::relay_events(reader, io::stdout().lock(), json)
 }
 
 #[cfg(test)]

@@ -32,7 +32,7 @@ impl WindowCatalog {
         self.ready
     }
 
-    /// Apply exactly one JSON object from niri msg --json event-stream.
+    /// Apply exactly one JSON object from Niri's Unix-socket JSON event stream.
     /// Unrelated Niri events are ignored, but malformed known events fail.
     pub fn apply_line(&mut self, line: &str) -> Result<Vec<CatalogUpdate>, NiriError> {
         let event: Value = serde_json::from_str(line)?;
