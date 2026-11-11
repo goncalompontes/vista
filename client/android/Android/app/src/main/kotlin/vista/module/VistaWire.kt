@@ -139,12 +139,20 @@ object VistaWire {
     }
 
     fun readFrame(input: InputStream, maxBytes: Int = MAX_CONTROL_FRAME_BYTES + AEAD_TAG_BYTES): ByteArray {
-        val header = input.readNBytes(4)
-        check(header.size == 4) { "host closed the connection" }
+        val header = readExact(input, 4, "host closed the connection")
         val length = ByteBuffer.wrap(header).order(ByteOrder.BIG_ENDIAN).int
         check(length in 1..maxBytes) { "invalid frame length" }
-        val bytes = input.readNBytes(length)
-        check(bytes.size == length) { "truncated frame" }
+        return readExact(input, length, "truncated frame")
+    }
+
+    private fun readExact(input: InputStream, length: Int, failure: String): ByteArray {
+        val bytes = ByteArray(length)
+        var offset = 0
+        while (offset < length) {
+            val count = input.read(bytes, offset, length - offset)
+            check(count > 0) { failure }
+            offset += count
+        }
         return bytes
     }
 

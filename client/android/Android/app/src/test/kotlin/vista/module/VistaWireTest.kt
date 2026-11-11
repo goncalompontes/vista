@@ -124,4 +124,19 @@ class VistaWireTest {
         "host_to_client" -> VistaWire.DIRECTION_HOST_TO_CLIENT
         else -> error("unknown direction $value")
     }
+
+    @Test
+    fun framingAcceptsShortReadsAndRejectsTruncatedHeadersAndBodies() {
+        val framed = byteArrayOf(0, 0, 0, 3, 10, 20, 30)
+        val shortReads = object : ByteArrayInputStream(framed) {
+            override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+                super.read(buffer, offset, minOf(length, 1))
+        }
+        assertArrayEquals(byteArrayOf(10, 20, 30), VistaWire.readFrame(shortReads))
+        for (length in 0 until framed.size) {
+            assertThrows(IllegalStateException::class.java) {
+                VistaWire.readFrame(ByteArrayInputStream(framed.copyOf(length)))
+            }
+        }
+    }
 }

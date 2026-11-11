@@ -23,25 +23,25 @@ for the exact commands and numbers, and for what that run does not prove.
 Keyboard/pointer input and host actions are implemented but have not yet been
 verified end to end through the iOS UI. See the [test record and next steps](integrations/vista-computer-use/docs/END_TO_END.md#what-was-actually-exercised).
 
-The Android client is native Kotlin/Jetpack Compose and speaks the same v1
-control protocol: pairing, encrypted control records, live catalog, capability
-snapshot, semantic actions, authenticated H.264 playback through `MediaCodec`
-and touch-to-pointer input. Its debug APK builds from a clean tree and its wire
-core is checked against the shared Rust/Swift pairing vector in CI; it is the
-current MVP verification platform. On 2026-11-11 a headless Android 36 emulator
-streamed 1920×1080 from a real Niri host and the host accepted 12
-touch-derived input and hardware-key events ([evidence](docs/android-verification.md)).
-Drag/scroll, a typed text run, audio, clipboard and a physical-device run
-remain. iOS stays a
-separate SwiftUI app and is not a build dependency of Android.
+The Android client is native Kotlin/Jetpack Compose and is the current MVP
+verification platform. It has Sill-inspired pairing, source-library and
+picture-first streaming screens; live H.264 playback; granted semantic controls;
+and explicit host input. Emulator checks against a real Niri host verify primary
+drag, secondary click, two-finger scroll, physical Shift, exact committed text,
+modifier cleanup, background/resume, rotation, source changes and restart/reconnect
+([evidence](docs/android-verification.md)). Control starts off and stays off after
+recovery. Stream sharing scope is explicit: a selected window still uses display
+capture and shared-desktop input on this host. iOS remains a separate SwiftUI app
+and is not an Android build dependency.
 
 The experimental `vista-host serve` is single-client and has no TLS. Keep it
 on loopback and treat its pairing invite as a secret. Its live capture path
 uses `grim` to repeatedly capture the active output; selecting a window focuses
 and fullscreens it, so window capture is not isolated. Encoding prefers NVIDIA
 NVENC when available, but screen capture uses the compositor's GPU. Independent
-application sessions, audio, clipboard, production discovery, and robust
-reconnection are not yet implemented.
+application sessions, audio, clipboard and production discovery are not yet
+implemented. Android reconnects by authenticating a fresh session; indefinite
+network recovery, physical-device decoding and multi-output input remain unverified.
 
 Earlier capture and transport diagnostics are described in
 [capture verification](docs/capture-verification.md), [architecture](docs/architecture.md),

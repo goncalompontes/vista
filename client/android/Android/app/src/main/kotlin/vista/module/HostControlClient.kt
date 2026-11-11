@@ -1,8 +1,8 @@
 package vista.module
 
 import android.os.Handler
-import android.util.Log
 import android.os.Looper
+import android.util.Log
 import android.view.Surface
 import org.json.JSONArray
 import org.json.JSONObject
@@ -11,432 +11,413 @@ import java.io.BufferedOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 
-data class HostWindow(val id: Long, val title: String, val appId: String?)
-data class HostAction(val id: String, val label: String, val selectable: Boolean, val reason: String?)
-
-private data class MediaOfferInfo(val port: Int, val pairingId: String, val expiresAt: Long)
-
-/**
- * Control and media connections to one Vista host session.
- *
- * The control connection pairs, selects a stream and serves catalog/capability
- * updates. `media.offer` starts a second authenticated connection that carries
- * AEAD-framed H.264 access units into [decoder].
+/** Authenticated v1 adapters. The pure reducer owns UI state; every queued
+ * command, media frame and callback is fenced by its original connection.
  */
 class HostControlClient {
-    private val executor = Executors.newSingleThreadExecutor()
-    private val commandExecutor = Executors.newSingleThreadExecutor()
-    private val mediaExecutor = Executors.newSingleThreadExecutor()
+    private val lock = Any()
+    private val worker = Executors.newSingleThreadExecutor()
+    private val commands = Executors.newSingleThreadExecutor()
+    private val mediaWorker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
-
-    val decoder = MediaDecoder()
-
-    private var socket: Socket? = null
+    private val generations = AtomicLong()
+    private var run = 0L
+    private var stopped = true
+    private var disposed = false
+    private var active: Control? = null
+    private var connecting: Socket? = null
     private var mediaSocket: Socket? = null
-    private var session: VistaSession? = null
     private var mediaSession: VistaSession? = null
-    @Volatile private var sessionActive = false
-    @Volatile private var mediaActive = false
-    @Volatile private var sessionId = ""
-    @Volatile private var geometryEpoch = 0L
-    @Volatile private var inputAllowed = false
-    @Volatile private var manualClose = false
-    @Volatile private var connectionGeneration = 0
-    @Volatile private var lastTarget: JSONObject? = null
-    private var hostAddress = ""
-    private var secret = ByteArray(0)
-    private var capabilityConnectionEpoch = ""
-    private var capabilityGrantEpoch = ""
-    private var capabilityTargetId = ""
-    private var capabilityTargetGeneration = ""
-    private var capabilityRevision = 0L
+    private var desired: StreamTarget? = null
+    private var capability: JSONObject? = null
+    private val input = InputGuard()
+    val decoder = MediaDecoder()
+    @Volatile var state = ClientState()
+        private set
+    var onState: ((ClientState) -> Unit)? = null
 
-    var onState: ((String) -> Unit)? = null
-    var onCatalog: ((List<HostWindow>) -> Unit)? = null
-    var onCapabilities: ((List<HostAction>) -> Unit)? = null
-    var onActionResult: ((String) -> Unit)? = null
-    var onConnected: ((Boolean) -> Unit)? = null
-    var onMediaActive: ((Boolean) -> Unit)? = null
-    var onStreamTarget: ((String) -> Unit)? = null
-    var onStreamError: ((String) -> Unit)? = null
-    var onVideoStats: ((Long) -> Unit)? = null
+    init {
+        decoder.onFrameRendered = { tag ->
+            synchronized(lock) {
+                if (state.playback != PlaybackState.Live)
+                    event(tag.connection, ClientEvent.Frame(tag.selection, tag.geometry))
+            }
+        }
+    }
+
+    private data class Control(val id: Long, val socket: Socket, val session: VistaSession)
 
     fun connect(host: String, port: Int, secretHex: String) {
-        close()
-        manualClose = false
-        val generation = ++connectionGeneration
-        executor.execute {
-            val parsedSecret = runCatching { VistaWire.hexToBytes(secretHex) }.getOrElse {
-                publish("Pairing secret must be 64 hex characters")
-                return@execute
-            }
-            secret = parsedSecret
-            hostAddress = host
-            var delayMs = 500L
-            var everConnected = false
-            while (!manualClose && generation == connectionGeneration) {
-                try {
-                    publish(if (everConnected) "Reconnecting…" else "Connecting…")
-                    runSession(host, port)
-                } catch (error: Throwable) {
-                    Log.e("VistaWire", "control connection failed", error)
-                    if (manualClose || generation != connectionGeneration) break
-                    publish("Connection lost: ${error.message ?: error.javaClass.simpleName}")
+        val secret = runCatching { VistaWire.hexToBytes(secretHex) }.getOrNull()
+        if (host.isBlank() || port !in 1..65535 || secret?.size != 32) {
+            synchronized(lock) { publish(state.copy(message = "Enter a host, valid port and 64-character hexadecimal secret.")) }
+            return
+        }
+        disconnect()
+        val currentRun: Long
+        synchronized(lock) {
+            if (disposed) return
+            stopped = false
+            desired = null
+            currentRun = ++run
+            publish(ClientState(host = host, connection = ConnectionState.Connecting, message = "Connecting…"))
+        }
+        worker.execute {
+            var retry = 500L
+            while (synchronized(lock) { !stopped && run == currentRun }) {
+                val id = generations.incrementAndGet()
+                synchronized(lock) {
+                    if (stopped || run != currentRun) return@execute
+                    publish(ClientState(connectionId = id, host = host, foreground = state.foreground,
+                        connection = if (retry == 500L) ConnectionState.Connecting else ConnectionState.Reconnecting,
+                        message = "Connecting to $host…"))
                 }
+                var ctx: Control? = null
+                try {
+                    val sock = Socket()
+                    synchronized(lock) {
+                        if (stopped || run != currentRun) { sock.close(); return@execute }
+                        connecting = sock
+                    }
+                    sock.tcpNoDelay = true
+                    sock.connect(InetSocketAddress(host, port), 12_000)
+                    sock.soTimeout = 15_000
+                    val session = VistaSession(BufferedInputStream(sock.getInputStream()),
+                        BufferedOutputStream(sock.getOutputStream()), secret, "vista-android")
+                    session.trace = { Log.d("VistaWire", "control: $it") }
+                    session.handshake(wantInput = true, encryptSessionOpen = true)
+                    sock.soTimeout = 0
+                    ctx = Control(id, sock, session)
+                    synchronized(lock) {
+                        if (stopped || run != currentRun) { sock.close(); return@execute }
+                        connecting = null
+                        active = ctx
+                        event(id, ClientEvent.Authenticated(session.policyInput))
+                        desired?.let { target ->
+                            event(id, ClientEvent.Selecting(target))
+                            sendSelection(ctx, target)
+                        }
+                    }
+                    retry = 500L
+                    while (synchronized(lock) { active === ctx && !stopped && run == currentRun }) {
+                        handle(ctx, session.readSecure(), host, secret)
+                    }
+                } catch (error: Exception) {
+                    synchronized(lock) {
+                        if (!stopped && run == currentRun) {
+                            event(id, ClientEvent.Lost("Connection lost. Retrying…"))
+                            Log.i("VistaWire", "control ended: ${error.javaClass.simpleName}")
+                        }
+                    }
+                } finally {
+                    synchronized(lock) {
+                        if (active === ctx) active = null
+                        closeSocket(ctx?.socket)
+                        closeSocket(connecting)
+                        connecting = null
+                        stopMedia()
+                        input.clear()
+                        capability = null
+                    }
+                }
+                if (synchronized(lock) { stopped || run != currentRun }) break
+                Thread.sleep(retry)
+                retry = minOf(retry * 2, 5_000L)
+            }
+            secret.fill(0)
+        }
+    }
+
+    fun select(target: StreamTarget) {
+        synchronized(lock) {
+            val ctx = active ?: return
+            if (!state.connected || target == state.target) return
+            cancelLocked(ctx)
+            val replacing = state.target != null
+            desired = target
+            capability = null
+            event(ctx.id, ClientEvent.Selecting(target))
+            if (replacing) {
+                // v1 media records carry no target generation. A fresh pair of
+                // sockets prevents old buffered pictures becoming the new target.
+                event(ctx.id, ClientEvent.Lost("Opening source…"))
+                closeSocket(ctx.socket)
                 stopMedia()
-                sessionActive = false
-                session = null
-                inputAllowed = false
-                closeSocket(socket)
-                socket = null
-                if (manualClose || generation != connectionGeneration) break
-                everConnected = true
-                publishConnected(false)
-                publish("Reconnecting in ${delayMs / 1000}s…")
-                try {
-                    Thread.sleep(delayMs)
-                } catch (_: InterruptedException) {
-                    break
+            } else commands.execute {
+                synchronized(lock) {
+                    if (active === ctx && state.target == target) sendSelection(ctx, target)
                 }
-                delayMs = minOf(delayMs * 2, 5_000L)
             }
         }
     }
 
-    /** One control connection; returns when the session ends or the user closes it. */
-    private fun runSession(host: String, port: Int) {
-        val sock = Socket()
-        sock.connect(InetSocketAddress(host, port), 12_000)
-        socket = sock
-        val control = VistaSession(
-            BufferedInputStream(sock.getInputStream()),
-            BufferedOutputStream(sock.getOutputStream()),
-            secret,
-            "vista-android",
-        )
-        session = control
-        control.trace = { Log.d("VistaWire", "control: $it") }
-        control.handshake(wantInput = true, encryptSessionOpen = true)
-        sessionId = control.sessionId
-        sessionActive = true
-        inputAllowed = control.policyInput
-        publish("Connected to $host" + if (inputAllowed) " (input enabled)" else "")
-        publishConnected(true)
-        sendSelection(control)
-        while (sessionActive && !manualClose) {
-            handle(control.readSecure())
+    fun setControl(enabled: Boolean) = synchronized(lock) {
+        if (!enabled) active?.let { cancelLocked(it) }
+        event(state.connectionId, ClientEvent.Control(enabled))
+    }
+
+    fun setForeground(foreground: Boolean) = synchronized(lock) {
+        if (!foreground) active?.let { cancelLocked(it) }
+        event(state.connectionId, ClientEvent.Foreground(foreground))
+    }
+
+    fun releaseInput() = synchronized(lock) {
+        active?.let { cancelLocked(it) }
+        event(state.connectionId, ClientEvent.Release)
+    }
+
+    fun send(token: InputToken, events: List<RemoteInput>) {
+        val ctx = synchronized(lock) { active?.takeIf { it.id == token.connection && state.inputToken == token } } ?: return
+        commands.execute {
+            synchronized(lock) {
+                if (active !== ctx) return@synchronized
+                try {
+                    for (command in events) {
+                        if (!input.accept(command, token, state.inputToken)) continue
+                        ctx.session.sendSecure(JSONObject().put("type", "input.event").put("v", 1)
+                            .put("session_id", ctx.session.sessionId).put("event", command.wire(token.geometry)))
+                        if (command == RemoteInput.Cancel) event(ctx.id, ClientEvent.Release)
+                        Log.d("VistaInput", "send ${command.wire(token.geometry).optString("type")}")
+                    }
+                } catch (_: Exception) {
+                    event(ctx.id, ClientEvent.Lost("Input connection lost. Retrying…"))
+                    closeSocket(ctx.socket)
+                }
+            }
         }
     }
 
-    fun selectDesktop() {
-        select(JSONObject().put("kind", "desktop"))
+    fun sendKey(usage: Int, pressed: Boolean, repeat: Boolean = false): Boolean {
+        val token = state.inputToken ?: return false
+        send(token, listOf(RemoteInput.Key(usage, pressed, repeat)))
+        return true
     }
 
-    fun selectWindow(windowId: Long) {
-        select(JSONObject().put("kind", "window").put("id", windowId))
-    }
-
-    fun selectWorkspace(workspaceId: Long) {
-        select(JSONObject().put("kind", "workspace").put("id", workspaceId))
-    }
-
-    /** True when the host granted portable input for this session. */
-    fun canSendInput(): Boolean = inputAllowed
-
-    fun attachSurface(surface: Surface) {
-        decoder.attachSurface(surface)
-    }
-
-    /** Normalized pointer position within the streamed frame. */
-    fun sendPointer(x: Double, y: Double) {
-        if (!inputAllowed) return
-        commandExecutor.execute {
-            sendInputEvent(
-                JSONObject()
-                    .put("type", "pointer.absolute")
-                    .put("x", x.coerceIn(0.0, 1.0))
-                    .put("y", y.coerceIn(0.0, 1.0))
-                    .put("geometry_epoch", geometryEpoch),
-            )
-        }
-    }
-
-    fun sendPointerButton(pressed: Boolean) {
-        if (!inputAllowed) return
-        commandExecutor.execute {
-            sendInputEvent(
-                JSONObject()
-                    .put("type", "pointer.button")
-                    .put("button", "primary")
-                    .put("pressed", pressed),
-            )
-        }
-    }
-
-    fun sendKey(usage: Int, pressed: Boolean, repeat: Boolean) {
-        if (!inputAllowed) return
-        commandExecutor.execute {
-            sendInputEvent(
-                JSONObject()
-                    .put("type", "key.physical")
-                    .put("usage", usage)
-                    .put("pressed", pressed)
-                    .put("repeat", repeat),
-            )
-        }
-    }
-
-    fun sendText(text: String) {
-        if (!inputAllowed || text.isEmpty()) return
-        commandExecutor.execute {
-            sendInputEvent(JSONObject().put("type", "text.commit").put("text", text))
-        }
-    }
-
-    private fun sendInputEvent(event: JSONObject) {
-        if (!sessionActive) return
-        Log.d("VistaInput", "send ${event.optString("type")}")
-        try {
-            session?.sendSecure(
-                JSONObject()
-                    .put("type", "input.event")
-                    .put("v", 1)
-                    .put("session_id", sessionId)
-                    .put("event", event),
-            )
-        } catch (error: Throwable) {
-            publish("Input failed: ${error.message ?: "transport error"}")
-        }
-    }
-
-    fun detachSurface() {
-        decoder.detachSurface()
+    fun sendText(text: String): Boolean {
+        val token = state.inputToken ?: return false
+        if (text.isEmpty() || text.toByteArray().size > 16 * 1024) return false
+        send(token, listOf(RemoteInput.Text(text)))
+        return true
     }
 
     fun invoke(action: HostAction) {
-        commandExecutor.execute {
-            if (!sessionActive || !action.selectable) return@execute
-            try {
-                session?.sendSecure(
-                    JSONObject()
-                        .put("type", "action.invoke")
-                        .put("v", 1)
+        val ctx: Control
+        val snapshot: JSONObject
+        val selection: Long
+        synchronized(lock) {
+            ctx = active ?: return
+            snapshot = capability ?: return
+            selection = state.selection
+            if (!state.connected || !state.foreground || !state.actions.contains(action) || !action.selectable) return
+        }
+        commands.execute {
+            synchronized(lock) {
+                if (active !== ctx || capability !== snapshot || selection != state.selection ||
+                    !state.foreground || !state.actions.contains(action)) return@synchronized
+                try {
+                    ctx.session.sendSecure(JSONObject().put("type", "action.invoke").put("v", 1)
                         .put("id", "android-${System.nanoTime()}")
-                        .put("connection_epoch", capabilityConnectionEpoch)
-                        .put("session_id", sessionId)
-                        .put("grant_epoch", capabilityGrantEpoch)
-                        .put("target_id", capabilityTargetId)
-                        .put("target_generation", capabilityTargetGeneration)
-                        .put("capability_revision", capabilityRevision)
-                        .put("action", action.id)
-                        .put("schema_version", 1)
+                        .put("connection_epoch", snapshot.getString("connection_epoch"))
+                        .put("session_id", ctx.session.sessionId)
+                        .put("grant_epoch", snapshot.getString("grant_epoch"))
+                        .put("target_id", snapshot.getString("target_id"))
+                        .put("target_generation", snapshot.getString("target_generation"))
+                        .put("capability_revision", snapshot.getLong("capability_revision"))
+                        .put("action", action.id).put("schema_version", 1)
                         .put("parameters", JSONObject().apply {
-                            if (action.id == "window.maximize.set") {
-                                put("value", action.label == "Maximize")
-                            }
-                        }),
-                )
-            } catch (error: Throwable) {
-                publish("Action failed: ${error.message ?: "transport error"}")
+                            if (action.id == "window.maximize.set") put("value", action.label == "Maximize")
+                        }))
+                } catch (_: Exception) { closeSocket(ctx.socket) }
             }
         }
     }
 
-    fun close() {
-        manualClose = true
-        connectionGeneration++
-        sessionActive = false
-        mediaActive = false
-        session = null
-        mediaSession = null
-        inputAllowed = false
-        closeSocket(socket)
-        closeSocket(mediaSocket)
-        socket = null
-        mediaSocket = null
-        publishConnected(false)
-        publishMediaActive(false)
-        publishCatalog(emptyList())
-        publishCapabilities(emptyList())
+    fun attachSurface(surface: Surface) {
+        decoder.attachSurface(surface)
+        synchronized(lock) { requestKeyframe() }
     }
-
-    private fun select(target: JSONObject) {
-        lastTarget = target
-        commandExecutor.execute {
-            if (!sessionActive) return@execute
-            val control = session ?: return@execute
-            try {
-                sendSelection(control)
-            } catch (error: Throwable) {
-                publish("Stream selection failed: ${error.message ?: "transport error"}")
-            }
+    fun detachSurface(surface: Surface) {
+        if (decoder.detachSurface(surface)) {
+            releaseInput()
+            synchronized(lock) { event(state.connectionId, ClientEvent.Recovering(state.selection)) }
         }
     }
 
-    private fun sendSelection(control: VistaSession) {
-        val target = lastTarget ?: JSONObject().put("kind", "desktop")
-        control.sendSecure(
-            JSONObject()
-                .put("type", "stream.select")
-                .put("v", 1)
-                .put("session_id", control.sessionId)
-                .put("target", target),
-        )
-    }
-
-    private fun handle(message: JSONObject) {
-        when (message.getString("type")) {
-            "capabilities.snapshot" -> {
-                capabilityConnectionEpoch = message.getString("connection_epoch")
-                capabilityGrantEpoch = message.getString("grant_epoch")
-                capabilityTargetId = message.getString("target_id")
-                capabilityTargetGeneration = message.getString("target_generation")
-                capabilityRevision = message.getLong("capability_revision")
-                publishCapabilities(parseActions(message.getJSONArray("actions")))
-            }
-            "catalog.snapshot" -> publishCatalog(parseCatalog(message.getJSONArray("entries")))
-            "action.result" -> publishActionResult(message)
-            "media.offer" -> {
-                val offer = MediaOfferInfo(
-                    port = message.getInt("port"),
-                    pairingId = message.optString("pairing_id"),
-                    expiresAt = message.optLong("expires_at"),
-                )
-                publish("Video endpoint on port ${offer.port}")
-                startMedia(offer)
-            }
-            "stream.started" -> {
-                geometryEpoch = message.optLong("geometry_epoch", 1)
-                val width = message.optInt("width", 0)
-                val height = message.optInt("height", 0)
-                val encoder = message.optString("encoder", "h264")
-                val target = message.optJSONObject("target")
-                val label = when (target?.optString("kind")) {
-                    "window" -> "window ${target.optLong("id")}"
-                    "workspace" -> "workspace ${target.optLong("id")}"
-                    else -> target?.optString("kind") ?: "stream"
-                }
-                publish("Streaming $label · $width×$height ($encoder)")
-                onStreamTarget?.let { callback -> main.post { callback(label) } }
-            }
-            "stream.stopped" -> {
-                stopMedia()
-                publish("Stream stopped: ${message.optString("reason", "host stopped the stream")}")
-            }
-            "stream.error" -> {
-                stopMedia()
-                val text = "${message.optString("code", "stream_error")}: ${message.optString("message")}"
-                publish(text)
-                onStreamError?.let { callback -> main.post { callback(text) } }
-            }
-            "pong" -> Unit
-            "session_close" -> {
-                publish("Host closed the session: ${message.optString("reason")}")
-                sessionActive = false
-            }
-            "error" -> throw IllegalStateException(
-                message.optString("message", message.optString("code", "host error")),
-            )
-        }
-    }
-
-    private fun startMedia(offer: MediaOfferInfo) {
+    fun disconnect() = synchronized(lock) {
+        stopped = true
+        run++
+        active?.let { cancelLocked(it); closeSocket(it.socket) }
+        active = null
+        closeSocket(connecting)
+        connecting = null
         stopMedia()
-        mediaExecutor.execute {
+        input.clear()
+        capability = null
+        desired = null
+        publish(ClientState(connectionId = generations.incrementAndGet(), foreground = state.foreground,
+            message = "Disconnected"))
+    }
+
+    fun dispose() {
+        synchronized(lock) { disposed = true }
+        disconnect()
+        worker.shutdownNow()
+        commands.shutdownNow()
+        mediaWorker.shutdownNow()
+        decoder.release()
+        onState = null
+    }
+
+    private fun cancelLocked(ctx: Control) {
+        // Main-thread lifecycle/layout callbacks only invalidate local state.
+        // Network cleanup runs on the ordered sender; the host also releases
+        // the lease if the socket closes before this cancellation is written.
+        input.clear()
+        if (!state.streamReady) return
+        commands.execute {
+            synchronized(lock) {
+                if (active !== ctx) return@synchronized
+                try {
+                    ctx.session.sendSecure(JSONObject().put("type", "input.event").put("v", 1)
+                        .put("session_id", ctx.session.sessionId).put("event", RemoteInput.Cancel.wire(0)))
+                } catch (_: Exception) { closeSocket(ctx.socket) }
+            }
+        }
+    }
+
+    private fun sendSelection(ctx: Control, target: StreamTarget) {
+        val wireTarget = JSONObject().put("kind", target.kind)
+        target.id?.let { wireTarget.put("id", it) }
+        ctx.session.sendSecure(JSONObject().put("type", "stream.select").put("v", 1)
+            .put("session_id", ctx.session.sessionId).put("target", wireTarget))
+    }
+
+    private fun handle(ctx: Control, message: JSONObject, host: String, secret: ByteArray) = synchronized(lock) {
+        if (active !== ctx || message.optString("session_id", ctx.session.sessionId) != ctx.session.sessionId) return@synchronized
+        when (message.getString("type")) {
+            "catalog.snapshot" -> event(ctx.id, ClientEvent.Catalog(message.getLong("revision"),
+                parseCatalog(message.getJSONArray("entries"))))
+            "capabilities.snapshot" -> {
+                val target = state.target
+                val targetId = when (target?.kind) {
+                    "window" -> "w${target.id}"
+                    "workspace" -> "ws${target.id}"
+                    "desktop" -> "desktop"
+                    else -> null
+                }
+                if (message.optString("target_id") == targetId && message.getLong("capability_revision") > state.capabilityRevision) {
+                    capability = message
+                    event(ctx.id, ClientEvent.Capabilities(message.getLong("capability_revision"), parseActions(message.getJSONArray("actions"))))
+                }
+            }
+            "media.offer" -> startMedia(ctx, host, secret, message.getInt("port"))
+            "stream.started" -> {
+                cancelLocked(ctx)
+                val target = message.getJSONObject("target")
+                val selected = StreamTarget(target.getString("kind"), if (target.has("id")) target.getLong("id") else null)
+                event(ctx.id, ClientEvent.Geometry(selected, message.getLong("geometry_epoch"),
+                    message.getInt("width"), message.getInt("height"),
+                    message.optString("input_scope", "unknown"), message.optString("capture_scope", "unknown")))
+                if (state.streamReady && state.target == selected) {
+                    decoder.resetForNewStream(state.width, state.height, InputToken(ctx.id, state.selection, state.geometryEpoch))
+                    requestKeyframe()
+                }
+            }
+            "stream.stopped", "stream.error" -> {
+                cancelLocked(ctx)
+                event(ctx.id, ClientEvent.Stopped(message.optString("message", message.optString("reason", "Source stopped"))))
+            }
+            "action.result" -> event(ctx.id, ClientEvent.Message("Action: ${message.optString("status", "unknown")}"))
+            "session_close", "error" -> {
+                cancelLocked(ctx)
+                event(ctx.id, ClientEvent.Lost("Host ended the session. Retrying…"))
+                closeSocket(ctx.socket)
+            }
+        }
+    }
+
+    private fun startMedia(ctx: Control, host: String, secret: ByteArray, port: Int) {
+        stopMedia()
+        mediaWorker.execute {
+            val sock = Socket()
             try {
-                val sock = Socket()
-                sock.connect(InetSocketAddress(hostAddress, offer.port), 12_000)
-                mediaSocket = sock
-                val media = VistaSession(
-                    BufferedInputStream(sock.getInputStream()),
-                    BufferedOutputStream(sock.getOutputStream()),
-                    secret,
-                    "vista-android-media",
-                )
-                mediaSession = media
+                synchronized(lock) { if (active !== ctx) return@execute; mediaSocket = sock }
+                sock.connect(InetSocketAddress(host, port), 12_000)
+                sock.soTimeout = 15_000
+                val media = VistaSession(BufferedInputStream(sock.getInputStream()),
+                    BufferedOutputStream(sock.getOutputStream()), secret, "vista-android-media")
                 media.trace = { Log.d("VistaWire", "media: $it") }
                 media.handshake(wantInput = false, encryptSessionOpen = false)
-                mediaActive = true
-                decoder.resetForNewStream()
-                publishMediaActive(true)
-                publish("Receiving video…")
-                media.sendKeyframeRequest()
-                var frames = 0L
-                while (mediaActive && sessionActive) {
+                sock.soTimeout = 0
+                synchronized(lock) {
+                    if (active !== ctx) return@execute
+                    mediaSession = media
+                    requestKeyframe()
+                }
+                while (true) {
                     val record = media.readRecord()
-                    decoder.submit(record)
-                    frames++
-                    if (frames % 30L == 0L) {
-                        publishVideoStats(frames)
+                    val tag = synchronized(lock) {
+                        if (active !== ctx) return@execute
+                        if (state.streamReady) InputToken(ctx.id, state.selection, state.geometryEpoch) else null
+                    } ?: continue
+                    if (record.discontinuity) synchronized(lock) {
+                        if (active === ctx && state.selection == tag.selection && state.geometryEpoch == tag.geometry) {
+                            // Disabling local control must not leave host keys/buttons held.
+                            cancelLocked(ctx)
+                            event(ctx.id, ClientEvent.Recovering(tag.selection))
+                        }
+                    }
+                    decoder.submit(record, tag)
+                }
+            } catch (error: Exception) {
+                synchronized(lock) {
+                    if (active === ctx) {
+                        event(ctx.id, ClientEvent.Recovering(state.selection))
+                        closeSocket(ctx.socket) // Re-pair both channels, never strand a frozen media socket.
                     }
                 }
-            } catch (error: Throwable) {
-                Log.e("VistaWire", "media connection failed", error)
-                if (mediaActive) {
-                    publish("Media ended: ${error.message ?: error.javaClass.simpleName}")
-                }
+                Log.i("VistaWire", "media ended: ${error.javaClass.simpleName}")
             } finally {
-                mediaActive = false
-                mediaSession = null
-                publishMediaActive(false)
-                closeSocket(mediaSocket)
-                mediaSocket = null
+                closeSocket(sock)
+                synchronized(lock) { if (mediaSocket === sock) { mediaSocket = null; mediaSession = null } }
             }
         }
     }
 
-    private fun stopMedia() {
-        mediaActive = false
-        closeSocket(mediaSocket)
-        mediaSocket = null
-        mediaSession = null
-        publishMediaActive(false)
-    }
-
-    private fun parseCatalog(entries: JSONArray): List<HostWindow> = buildList {
-        for (index in 0 until entries.length()) {
-            val entry = entries.getJSONObject(index)
-            add(
-                HostWindow(
-                    entry.getLong("window_id"),
-                    entry.optString("title", "Window ${entry.getLong("window_id")}"),
-                    entry.optString("app_id").takeIf { it.isNotEmpty() },
-                ),
-            )
+    private fun requestKeyframe() {
+        val media = mediaSession ?: return
+        val ctx = active ?: return
+        commands.execute {
+            synchronized(lock) {
+                if (mediaSession !== media || active !== ctx) return@synchronized
+                try { media.sendKeyframeRequest() }
+                catch (_: Exception) { closeSocket(ctx.socket) }
+            }
         }
     }
-
-    private fun parseActions(actions: JSONArray): List<HostAction> = buildList {
-        for (index in 0 until actions.length()) {
-            val action = actions.getJSONObject(index)
-            val presentation = action.optJSONObject("presentation")
-            add(
-                HostAction(
-                    action.getString("id"),
-                    presentation?.optString("label", action.getString("id")) ?: action.getString("id"),
-                    action.optBoolean("supported") &&
-                        action.optBoolean("enabled") &&
-                        action.optString("authorization") == "granted",
-                    action.optString("reason").takeIf { it.isNotEmpty() },
-                ),
-            )
-        }
+    private fun stopMedia() { closeSocket(mediaSocket); mediaSocket = null; mediaSession = null }
+    private fun event(id: Long, event: ClientEvent) {
+        val next = ClientReducer.reduce(state, id, event)
+        publish(next)
     }
-
-    private fun publish(value: String) = main.post { onState?.invoke(value) }
-    private fun publishConnected(value: Boolean) = main.post { onConnected?.invoke(value) }
-    private fun publishMediaActive(value: Boolean) = main.post { onMediaActive?.invoke(value) }
-    private fun publishCatalog(value: List<HostWindow>) = main.post { onCatalog?.invoke(value) }
-    private fun publishCapabilities(value: List<HostAction>) = main.post { onCapabilities?.invoke(value) }
-    private fun publishActionResult(value: JSONObject) =
-        main.post { onActionResult?.invoke(value.optString("status", "unknown")) }
-    private fun publishVideoStats(frames: Long) = main.post { onVideoStats?.invoke(frames) }
-
-    private fun closeSocket(target: Socket?) {
-        try {
-            target?.close()
-        } catch (_: Throwable) {
-        }
+    private fun publish(next: ClientState) {
+        if (state == next) return
+        state = next
+        main.post { if (state === next) onState?.invoke(next) }
     }
+    private fun closeSocket(socket: Socket?) { runCatching { socket?.close() } }
+
+    private fun parseCatalog(entries: JSONArray): List<HostWindow> = (0 until entries.length()).map { index ->
+        val entry = entries.getJSONObject(index)
+        HostWindow(entry.getLong("window_id"), entry.optString("title", "Untitled window"),
+            entry.optString("app_id").takeIf { it.isNotEmpty() })
+    }
+    private fun parseActions(actions: JSONArray): List<HostAction> = (0 until actions.length()).map { index ->
+        val action = actions.getJSONObject(index)
+        HostAction(action.getString("id"), action.optJSONObject("presentation")?.optString("label") ?: action.getString("id"),
+            action.optBoolean("supported") && action.optBoolean("enabled") && action.optString("authorization") == "granted",
+            action.optString("reason").takeIf { it.isNotEmpty() })
+    }.filter { it.id in setOf("window.focus", "window.close", "window.maximize.set", "host.workspace.next") }
 }

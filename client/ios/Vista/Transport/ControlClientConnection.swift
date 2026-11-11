@@ -350,7 +350,7 @@ public final class ControlClientConnection: @unchecked Sendable {
                 capabilitySession = session
             }
             onEvent?(.actionResult(result))
-        case let .streamStarted(_, target, width, height, geometryEpoch, _):
+        case let .streamStarted(_, target, width, height, geometryEpoch, _, _, _):
             try client.acceptStreamEvent(envelope)
             lastStreamTarget = target
             lastGeometryEpoch = geometryEpoch

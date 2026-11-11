@@ -314,7 +314,7 @@ public final class ControlPairingClient {
         try checkHostSequence(envelope)
         let receivedSessionID: String
         switch envelope.body {
-        case let .streamStarted(id, _, _, _, _, _),
+        case let .streamStarted(id, _, _, _, _, _, _, _),
              let .streamStopped(id, _),
              let .streamError(id, _, _):
             receivedSessionID = id

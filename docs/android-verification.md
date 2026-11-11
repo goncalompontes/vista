@@ -4,7 +4,93 @@ Recorded evidence for the native Android client against a live Vista host. This
 is emulator evidence, not a physical-device claim. No screenshots are committed:
 the captured surface contains the host desktop.
 
-## 2026-11-11 — control, live H.264 and touch input
+## 2026-11-11 — native usability, input effects and recovery
+
+**Client:** native Kotlin/Compose debug app and instrumented test APK on Android
+36 x86_64 `VistaPixel`, headless SwiftShader emulator. **Host:** this increment
+on top of merged #103 (`a938d48`), Arch Linux/Niri, one 1920×1080 output at scale
+1, software `x264enc`. The disposable GTK4 window is the only input target.
+
+The clean combined run completed **2 instrumented tests in 33.905 seconds**.
+It exercised pairing validation, source selection and actual rendered H.264,
+then primary drag, secondary click, two-finger scroll, physical Shift, explicit
+text commit, background/resume, portrait→landscape→portrait, window→desktop→window
+selection, host process restart with refused-connection retries, fresh pairing
+and media, and disconnect. Local control stayed off after lifecycle/recovery
+transitions. Native target effects passed the separate validator:
+
+| Observation in the disposable target | Result |
+| --- | --- |
+| Held primary drag | `dx=295.93`, `dy=18.49` logical pixels |
+| Secondary click | Button 3 down and up |
+| Two-finger scroll | One native vertical wheel event, `dy=-1` |
+| Committed text | Exactly `vista mvp verified 20261111` |
+| Physical Shift down→up | 0.013 s |
+| Shift held before background→release | 0.584 s |
+| Final key/button state | All released |
+
+There were 29 native key-down and 29 key-up observations (27 text characters
+and two Shift presses), two pointer-button down/up pairs, one drag and one
+scroll. These are actual GTK observations, not merely host event counters.
+No semantic action was invoked; #101/#102 retain that separate verification.
+
+The host pointer adapter now uses native uinput absolute axes for positions,
+buttons and wheel. `ydotool --absolute` was found to simulate absolute positions
+using accelerated relative motion, which missed the requested coordinates.
+Keyboard and committed text still use the private ydotool daemon. No desktop
+acceleration configuration was changed.
+
+Reproduce with a booted emulator, JDK/SDK, a built host, GTK4 Python bindings,
+working capture/input permissions and a free loopback port 7443:
+
+```sh
+client/android/build-android.sh :app:testDebugUnitTest :app:assembleDebug \
+  :app:assembleDebugAndroidTest
+cargo build -p vista-host
+adb install -r client/android/Android/app/build/outputs/apk/debug/app-debug.apk
+adb install -r client/android/Android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+XDG_RUNTIME_DIR=/run/user/1000 python3 client/android/testing/run-smoke.py \
+  --niri-socket "$NIRI_SOCKET"
+```
+
+The opt-in runner focuses a disposable window: leave host focus unchanged until
+it exits. It starts only its own host/window, transfers a generated private
+invitation to the emulator, coordinates the host restart, validates native
+effects and cleans its processes. Artifacts remain in a private temporary
+directory. Screenshots include the desktop/catalog and host logs contain a
+pairing secret; neither is committed or published. Earlier runs interrupted by
+host focus changes are excluded from the clean counts above. `--playback-only`
+can isolate recovery checks but is not input evidence.
+
+Local gates: **34 Android JVM tests**, debug app and instrumentation APK builds and Android lint (zero errors);
+**64 Swift core tests**; **152 Rust library tests plus integration suites**, with
+live diagnostics left opt-in; Rust formatting and warnings-as-errors Clippy.
+The shared scope fixture is checked by Rust, Swift and Android. Native design
+fixtures cover the ten supported v1 scenarios, not future protocol features.
+
+Screenshots were inspected privately for pairing, library, control/view-only,
+portrait/landscape and reconnected states. Recovery assertions sample actual
+picture pixels as well as the live label, so a black native surface cannot pass.
+The same native video view stays mounted across orientation changes. Test controls use Compose semantics
+because Android accessibility snapshots cached obsolete nodes during rapid
+surface/window transitions; native gestures and physical key injection still
+traverse Android's input system and the real host transport.
+
+Limits: no physical device or hardware-decoder evidence; no multi-output input
+mapping, external physical keyboard/trackpad, IME composition protocol, latency
+benchmark, indefinite/network-partition soak, audio, clipboard, discovery or
+independent-session claim. Window selection focuses/fullscreens a window while
+the host captures its display and injects into the shared desktop. Reconnect
+creates a fresh authenticated session and does not resume a lease. The older
+75-second playback record below remains a separate baseline, not a soak of this
+new UI.
+
+## Earlier baseline — control, live H.264 and touch input (2026-11-11)
+
+The remaining sections record the older #103 build. Their limitations apply to
+those runs; the clean native-effect checks above supersede their input gaps.
+
+
 
 **Client:** `client/android` debug APK (`dev.vista.client`, `vista.module.MainActivity`),
 x86_64 Android 36 `VistaPixel` AVD, headless (`-no-window -gpu swiftshader_indirect`).

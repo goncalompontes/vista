@@ -42,13 +42,15 @@ Implemented and tested in the repository:
 - iOS/iPadOS Swift control transport, pairing crypto, Keychain-backed pairing
   sheet, live window catalog and VideoToolbox stream view with a synthetic
   self-test.
-- Native Android Kotlin/Compose client: pairing, AEAD session, catalog,
-  capability snapshot, semantic actions, `media.offer` handling, authenticated
-  H.264 receive through `MediaCodec`, touch-to-pointer input and hardware key
-  events, with shared-vector wire tests and a clean Gradle/CI build.
-  Demonstrated against the real host on an Android 36 emulator, including a
-  ~75 s run at 1920×1080 with 654 frames and zero drops
-  ([evidence](android-verification.md)).
+- Native Android Kotlin/Compose client: pairing, encrypted control/media,
+  authenticated catalog, granted semantic actions and rendered MediaCodec H.264.
+  Merged #103 retired Skip. The Android usability increment adds Sill-inspired
+  portrait/landscape screens, token-fenced input, primary drag, secondary click,
+  two-finger scroll, physical keys and committed text. Real-host emulator checks
+  observe native target effects, modifier cleanup, background/resume, rotation,
+  source changes and restart/reconnect ([evidence](android-verification.md)).
+  Physical hardware and iOS emulation are follow-up validation, not gates for
+  this emulator-first milestone.
 
 Demonstrated on 2026-11-11 with the Rust reference client (see
 [e2e-verification.md](e2e-verification.md)):
@@ -60,9 +62,9 @@ Demonstrated on 2026-11-11 with the Rust reference client (see
 Not yet demonstrated anywhere:
 
 - A semantic action (`action.invoke`) reaching a real desktop through the
-  transport. One absolute pointer event now passes the encrypted channel, the
-  lease and the injector (see [input-verification.md](input-verification.md)),
-  but no action, click, drag or text commit has been exercised end to end.
+  transport. PR #102 / issue #101 own that reference-client verification.
+  Android input effects are separately demonstrated in
+  [Android verification](android-verification.md).
 - Native-client playback beyond the 2026-11-10 iOS run and the 2026-11-11
   Android emulator run: no sustained iOS session, no physical Android device,
   no hardware-decoder recovery evidence.
@@ -199,20 +201,21 @@ client cannot see or affect the host desktop.
 | Reference-client completion and clean-shutdown semantics (real desktop, workspace and window targets) | #98 | merged |
 | Skip-transpilable framing and view defaults | #99 | merged |
 | Input path: pointer event through the transport, lease and injector | #100 | merged |
-| Native Android client: retire Skip, Gradle/CI build, shared-vector wire tests | #103 | open |
-| Android live H.264 via MediaCodec + touch pointer input (emulator evidence) | #103 | open |
+| Native Android client: retire Skip, Gradle/CI build, shared-vector wire tests | #103 | merged |
+| Android live H.264 via MediaCodec + touch pointer input (emulator evidence) | #103 | merged |
 
 ### Next steps
 
-1. Prove one action and one input event reaching a real desktop through the
-   transport, with an opt-in run that states exactly what moved.
-2. Finish Android interaction: drag/scroll, a typed text commit run, then a
-   physical-device run of the existing media path. The Android client is the
-   MVP verification platform while iOS stays unverified.
-3. Add backpressure/throughput work and discovery; the Android client already
-   retries control and media connections after a drop.
+1. Review/deliver the Android usability increment described in
+   [android-usability.md](android-usability.md). Its native input and recovery
+   evidence uses an emulator with a real host and disposable target.
+2. Complete real-desktop semantic-action verification in #101/#102. This stays
+   separate from the Android increment.
+3. Add backpressure/throughput work and discovery. Validate physical Android
+   decoders and multi-output input separately; current evidence is one emulator
+   on a single-output Niri desktop.
 4. Continue M3 audio/clipboard, then M4 independent sessions and M5
-   packaging/reliability.
+   packaging/reliability. iOS runtime/input work remains a separate client gate.
 
 ## Definition of done (every increment)
 

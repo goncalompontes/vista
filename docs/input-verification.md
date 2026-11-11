@@ -4,7 +4,15 @@ Recorded evidence that a portable input event travels from the reference client
 through the authenticated control channel, the target-scoped control lease and
 the host injector, instead of being stopped at a unit-test fake.
 
-## 2026-11-11 — one absolute pointer event
+## 2026-11-11 — native Android input effects
+
+The newer [Android verification record](android-verification.md) observes actual
+drag, secondary click, scroll, text and modifier release in a disposable GTK
+window. It also records the host fix from accelerated `ydotool --absolute`
+motion to a native uinput absolute pointer. The older record below proves only
+injector acceptance; it does not establish accurate pointer placement.
+
+## 2026-11-11 — earlier single absolute pointer event
 
 **Host:** Arch Linux, Niri, commit `main` with the `--pointer` fix below.
 **Injection backend:** the host's `ydotoold`/`/dev/uinput` injector, enabled
