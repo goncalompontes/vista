@@ -4,6 +4,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.InputStream
@@ -74,12 +75,52 @@ class VistaSessionTest {
         }
     }
 
+    @Test
+    fun sessionOpenedPermissionsAreAuthoritativeAndMissingGrantsFailClosed() {
+        for (permissions in listOf(JSONObject().put("video", true).put("input", false), null)) {
+            val session = negotiatedSession(permissions = permissions)
+            assertFalse(session.policyInput)
+            assertEquals(permissions != null, session.policyVideo)
+        }
+    }
+
+    @Test
+    fun sessionOpenedCannotReplaceTheAuthenticatedSessionIdentity() {
+        assertThrows(IllegalStateException::class.java) { negotiatedSession(wrongSession = true) }
+    }
+
+    private fun negotiatedSession(permissions: JSONObject? = JSONObject().put("input", true), wrongSession: Boolean = false): VistaSession {
+        val clientToHost = PipedOutputStream()
+        val hostIn = PipedInputStream(clientToHost)
+        val hostToClient = PipedOutputStream()
+        val clientIn = PipedInputStream(hostToClient)
+        val pool = Executors.newSingleThreadExecutor()
+        try {
+            val host = pool.submit {
+                ScriptedHost(hostIn, hostToClient, secret, encryptSessionOpen = true, expectInput = true,
+                    openedPermissions = permissions, wrongSession = wrongSession).handshake()
+            }
+            val session = VistaSession(clientIn, clientToHost, secret, "vista-android")
+            try { session.handshake(wantInput = true, encryptSessionOpen = true) }
+            finally { host.get(5, TimeUnit.SECONDS) }
+            return session
+        } finally {
+            pool.shutdownNow()
+            clientIn.close()
+            clientToHost.close()
+            hostIn.close()
+            hostToClient.close()
+        }
+    }
+
     private class ScriptedHost(
         private val input: InputStream,
         private val output: OutputStream,
         private val secret: ByteArray,
         private val encryptSessionOpen: Boolean,
         private val expectInput: Boolean,
+        private val openedPermissions: JSONObject? = JSONObject().put("video", true).put("input", expectInput),
+        private val wrongSession: Boolean = false,
     ) {
         private var hostOutSequence = 0L
         private var inCounter = 0L
@@ -122,11 +163,10 @@ class VistaSessionTest {
             val open = if (encryptSessionOpen) readSecure() else readPlain()
             assertEquals("session_open", open.getString("type"))
             assertEquals(expectInput, open.getJSONObject("permissions").getBoolean("input"))
-            if (encryptSessionOpen) {
-                writeSecure(JSONObject().put("type", "session_opened").put("session_id", sessionId))
-            } else {
-                writePlain(JSONObject().put("type", "session_opened").put("session_id", sessionId))
-            }
+            val opened = JSONObject().put("type", "session_opened")
+                .put("session_id", if (wrongSession) "different-session" else sessionId)
+            openedPermissions?.let { opened.put("permissions", it) }
+            if (encryptSessionOpen) writeSecure(opened) else writePlain(opened)
         }
 
         fun sendControl(message: JSONObject) {

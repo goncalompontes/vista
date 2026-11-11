@@ -103,6 +103,10 @@ class VistaSession(
         if (encryptSessionOpen) sendSecure(open) else sendPlain(open)
         val opened = if (encryptSessionOpen) readSecure() else readPlain()
         check(opened.getString("type") == "session_opened") { "session was not opened" }
+        check(opened.getString("session_id") == sessionId) { "session identity changed" }
+        val actual = opened.optJSONObject("permissions")
+        policyInput = grantedInput && actual?.optBoolean("input") == true
+        policyVideo = policyVideo && actual?.optBoolean("video") == true
     }
 
     fun sendSecure(message: JSONObject) {

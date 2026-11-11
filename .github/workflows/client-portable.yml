@@ -35,9 +35,9 @@ jobs:
           # `tools` is no longer a valid sdkmanager package in the current
           # command-line tools; install only what the build needs.
           packages: "platform-tools platforms;android-36 build-tools;36.0.0"
-      - name: Build debug APK and run JVM wire tests
+      - name: Build APKs, run JVM tests and lint
         working-directory: client/android/Android
-        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon
+        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug --no-daemon
 
   swift-core-linux:
     name: VistaCore tests (Linux, Swift 6.0)
