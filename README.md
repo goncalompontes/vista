@@ -30,8 +30,9 @@ and touch-to-pointer input. Its debug APK builds from a clean tree and its wire
 core is checked against the shared Rust/Swift pairing vector in CI; it is the
 current MVP verification platform. On 2026-11-11 a headless Android 36 emulator
 streamed 1920×1080 from a real Niri host and the host accepted 12
-touch-derived input events ([evidence](docs/android-verification.md)). Keyboard
-and text input, audio, clipboard and a physical-device run remain. iOS stays a
+touch-derived input and hardware-key events ([evidence](docs/android-verification.md)).
+Drag/scroll, a typed text run, audio, clipboard and a physical-device run
+remain. iOS stays a
 separate SwiftUI app and is not a build dependency of Android.
 
 The experimental `vista-host serve` is single-client and has no TLS. Keep it

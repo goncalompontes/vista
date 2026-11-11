@@ -7,14 +7,13 @@ transpiled copy of the SwiftUI views.
 **Status (2026-11-11):** pairing, the encrypted control record layer, the live
 window catalog, the capability snapshot and semantic `action.invoke` work, and
 the client now plays live host H.264 through `MediaCodec`, forwards touch as
-portable pointer events and commits typed text. The debug APK builds from a clean tree, its wire core
+portable pointer events, maps hardware key events and commits typed text. The debug APK builds from a clean tree, its wire core
 passes the shared Rust/Swift pairing vector as JVM tests, and a headless
 Android 36 x86_64 emulator streamed 1920x1080 from the real host while the host
 accepted 12 touch-derived input events. See
-[Android verification](../../docs/android-verification.md). **Physical key events,
-drag/scroll with a held button, audio and clipboard are not wired yet; text
-commit exists but has not been exercised end to end, and no physical device has
-been tested.**
+[Android verification](../../docs/android-verification.md). **Drag/scroll with a held button,
+text commit as a typed run and audio/clipboard are not wired or exercised yet;
+no physical device has been tested.**
 
 Earlier revisions transpiled the SwiftUI client with Skip Lite. That path is
 retired: the shared `VistaCore` sources are iOS-only, the clean transpile did
@@ -118,9 +117,10 @@ recorded separately.
 
 ## Known gaps
 
-- Physical keyboard events (`key.physical`) and drag with a button held across a
-  gesture, scroll and long-press/secondary click are not wired; the client sends
-  absolute pointer position, the primary button and committed text.
+- Drag with a button held across a gesture, scroll and long-press/secondary
+  click are not wired; the client sends absolute pointer position, the primary
+  button, hardware key presses (letters, digits, arrows, modifiers and common
+  editing keys) and committed text. Only Shift has been exercised end to end.
 - No retry/reconnect policy beyond reporting the failure, and no discovery.
 - Media decode is verified only on an x86_64 emulator; hardware-decoder
   behaviour on a phone is untested.

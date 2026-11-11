@@ -61,6 +61,33 @@ The emulator rendered a letterboxed live stream labelled
 `Streaming 1920×1080 (x264enc)` and `Touch: enabled`; the frame counter advanced
 to 182 before the client was stopped.
 
+### Second run — touch and hardware key events
+
+The same setup with the key logging enabled. One tap on the video surface and
+two `adb shell input keyevent 59` (left Shift) invocations:
+
+```text
+VistaInput: send pointer.button
+VistaInput: send pointer.absolute
+VistaInput: send pointer.absolute
+VistaInput: send pointer.button
+VistaInput: send key.physical
+VistaInput: send key.physical
+VistaInput: send key.physical
+VistaInput: send key.physical
+```
+
+```json
+{"client_id":"client","catalog_revision":8,"stream_target":{"kind":"desktop"},
+ "frames":197,"bytes":1888847,"dropped":0,"actions_completed":0,
+ "input_events":8,"reason":"peer disconnected"}
+```
+
+Each `adb keyevent` produces a press and a release, so the eight host-accepted
+events correspond exactly to the four pointer and four key events the client
+logged. Shift was used deliberately: it exercises the HID-usage-to-evdev path
+without typing any character into the live host desktop.
+
 ## What this establishes
 
 - The Kotlin control client pairs with the real host, opens an encrypted
@@ -74,6 +101,9 @@ to 182 before the client was stopped.
 - Touch events travel as `input.event` over the encrypted control channel,
   through the target-scoped lease and the uinput injector; the host accepted
   all 12 events with no rejection.
+- Hardware key events (`key.physical`, HID usage page 0x07) follow the same
+  path; four Shift press/release events were logged by the client and counted
+  by the host as part of the same eight accepted events.
 - The Android Gradle build and 11 JVM unit tests pass, including the shared
   Rust/Swift pairing vector and a scripted control + media handshake.
 
@@ -84,8 +114,10 @@ to 182 before the client was stopped.
 - No pixel comparison or latency measurement. The frame count is the host's
   send count and the client's decode path, not a frame-rate or quality claim.
 - Pointer movement was not visually verified (the host count proves the
-  injector accepted the events). No drag, scroll or physical key event was
-  exercised, and text commit is implemented but was not sent in this run.
+  injector accepted the events). No drag or scroll was exercised.
+- Only Shift was sent as a physical key; the full key mapping has JVM tests but
+  no typed-character or shortcut run. Text commit is implemented and was not
+  sent in this run.
 - The host path still captures the whole output and fullscreens a selected
   window; it is single-client and has no TLS. Treat the pairing secret and the
   LAN as trusted.

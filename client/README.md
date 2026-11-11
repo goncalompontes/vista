@@ -193,8 +193,8 @@ encrypted v1 protocol as iOS, plays live host H.264 through `MediaCodec`, and
 forwards touch as portable pointer events. The wire core is checked against the
 shared Rust/Swift pairing vector as JVM tests, and the debug APK is built and
 tested in CI. A headless Android 36 emulator streamed 1920×1080 from a real host
-on 2026-11-11 ([evidence](../docs/android-verification.md)); keyboard/text,
-audio, clipboard and a physical-device run remain.
+on 2026-11-11 ([evidence](../docs/android-verification.md)); drag/scroll, a
+typed text run, audio, clipboard and a physical-device run remain.
 
 ## Android device or emulator
 

@@ -1,5 +1,7 @@
 package vista.module
 
+import android.content.Context
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -183,8 +185,13 @@ private fun VideoSurface(client: HostControlClient, modifier: Modifier = Modifie
     AndroidView(
         modifier = modifier,
         factory = { context ->
-            SurfaceView(context).also { view ->
+            VistaSurfaceView(context) { usage, pressed, repeat ->
+                client.sendKey(usage, pressed, repeat)
+            }.also { view ->
                 view.setOnTouchListener { touched, event ->
+                    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                        touched.requestFocus()
+                    }
                     val normalizedX = (event.x / touched.width.coerceAtLeast(1)).toDouble()
                     val normalizedY = (event.y / touched.height.coerceAtLeast(1)).toDouble()
                     when (event.actionMasked) {
@@ -218,4 +225,28 @@ private fun VideoSurface(client: HostControlClient, modifier: Modifier = Modifie
             }
         },
     )
+}
+
+
+/** SurfaceView that turns hardware keyboard events into portable key events. */
+private class VistaSurfaceView(
+    context: Context,
+    private val onKey: (usage: Int, pressed: Boolean, repeat: Boolean) -> Unit,
+) : SurfaceView(context) {
+    init {
+        isFocusable = true
+        isFocusableInTouchMode = true
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        val usage = KeyMapping.hidUsage(keyCode) ?: return super.onKeyDown(keyCode, event)
+        onKey(usage, true, event.repeatCount > 0)
+        return true
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        val usage = KeyMapping.hidUsage(keyCode) ?: return super.onKeyUp(keyCode, event)
+        onKey(usage, false, false)
+        return true
+    }
 }

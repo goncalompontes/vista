@@ -152,6 +152,19 @@ class HostControlClient {
         }
     }
 
+    fun sendKey(usage: Int, pressed: Boolean, repeat: Boolean) {
+        if (!inputAllowed) return
+        commandExecutor.execute {
+            sendInputEvent(
+                JSONObject()
+                    .put("type", "key.physical")
+                    .put("usage", usage)
+                    .put("pressed", pressed)
+                    .put("repeat", repeat),
+            )
+        }
+    }
+
     fun sendText(text: String) {
         if (!inputAllowed || text.isEmpty()) return
         commandExecutor.execute {
@@ -161,6 +174,7 @@ class HostControlClient {
 
     private fun sendInputEvent(event: JSONObject) {
         if (!sessionActive) return
+        Log.d("VistaInput", "send ${event.optString("type")}")
         try {
             session?.sendSecure(
                 JSONObject()

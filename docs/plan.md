@@ -44,7 +44,8 @@ Implemented and tested in the repository:
   self-test.
 - Native Android Kotlin/Compose client: pairing, AEAD session, catalog,
   capability snapshot, semantic actions, `media.offer` handling, authenticated
-  H.264 receive through `MediaCodec`, and touch-to-pointer input, with
+  H.264 receive through `MediaCodec`, touch-to-pointer input and hardware key
+  events, with
   shared-vector wire tests and a clean Gradle/CI build. Demonstrated against the
   real host on an Android 36 emulator
   ([evidence](android-verification.md)).
@@ -205,7 +206,7 @@ client cannot see or affect the host desktop.
 
 1. Prove one action and one input event reaching a real desktop through the
    transport, with an opt-in run that states exactly what moved.
-2. Finish Android interaction: keyboard/text commit, drag/scroll, and a
+2. Finish Android interaction: drag/scroll, a typed text commit run, then a
    physical-device run of the existing media path. The Android client is the
    MVP verification platform while iOS stays unverified.
 3. Add incremental catalog refresh and reconnect/backpressure handling on both
