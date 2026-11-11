@@ -45,9 +45,9 @@ Implemented and tested in the repository:
 - Native Android Kotlin/Compose client: pairing, AEAD session, catalog,
   capability snapshot, semantic actions, `media.offer` handling, authenticated
   H.264 receive through `MediaCodec`, touch-to-pointer input and hardware key
-  events, with
-  shared-vector wire tests and a clean Gradle/CI build. Demonstrated against the
-  real host on an Android 36 emulator
+  events, with shared-vector wire tests and a clean Gradle/CI build.
+  Demonstrated against the real host on an Android 36 emulator, including a
+  ~75 s run at 1920×1080 with 654 frames and zero drops
   ([evidence](android-verification.md)).
 
 Demonstrated on 2026-11-11 with the Rust reference client (see

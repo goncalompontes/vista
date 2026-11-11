@@ -88,6 +88,23 @@ events correspond exactly to the four pointer and four key events the client
 logged. Shift was used deliberately: it exercises the HID-usage-to-evdev path
 without typing any character into the live host desktop.
 
+### Third run — 75-second soak
+
+The client was left connected for about 75 seconds with no interaction:
+
+```json
+{"client_id":"client","catalog_revision":40,"stream_target":{"kind":"desktop"},
+ "frames":654,"bytes":6724459,"dropped":0,"actions_completed":0,
+ "input_events":0,"reason":"peer disconnected"}
+```
+
+The emulator showed `Live · 600 frames`, `Streaming desktop · 1920×1080
+(x264enc)`, `Target: desktop` and `Touch: enabled`. The host reported no
+dropped frames and no media error. The configured target was 15 fps; the
+effective rate was about 8.7 fps (654 frames over ~75 s), consistent with the
+`grim` capture loop plus software `x264enc` and emulator decode, not with a
+stall. This is not a latency or throughput benchmark.
+
 ## What this establishes
 
 - The Kotlin control client pairs with the real host, opens an encrypted
@@ -104,15 +121,19 @@ without typing any character into the live host desktop.
 - Hardware key events (`key.physical`, HID usage page 0x07) follow the same
   path; four Shift press/release events were logged by the client and counted
   by the host as part of the same eight accepted events.
-- The Android Gradle build and 11 JVM unit tests pass, including the shared
-  Rust/Swift pairing vector and a scripted control + media handshake.
+- Sustained playback: the client stayed connected for ~75 s and the host
+  delivered 654 authenticated records (6.7 MB) with zero drops and no errors.
+- The Android Gradle build and 16 JVM unit tests pass, including the shared
+  Rust/Swift pairing vector, media parsing, Annex-B, key mapping and a scripted
+  control + media handshake.
 
 ## What this does not establish
 
 - No physical Android device run; `MediaCodec` behaviour on a phone's hardware
   decoder is unverified.
-- No pixel comparison or latency measurement. The frame count is the host's
-  send count and the client's decode path, not a frame-rate or quality claim.
+- No pixel comparison or latency measurement. The frame counts are the host's
+  send count, not a frame-rate, smoothness or quality claim; the soak ran at an
+  effective ~8.7 fps against a configured 15 fps.
 - Pointer movement was not visually verified (the host count proves the
   injector accepted the events). No drag or scroll was exercised.
 - Only Shift was sent as a physical key; the full key mapping has JVM tests but
