@@ -109,6 +109,74 @@ final class H264AnnexBTests: XCTestCase {
         }
     }
 
+    func testDiscontinuityRequiresFreshParameterSetsAndIdr() throws {
+        let (_, units) = try fixture()
+        var gate = H264StreamGate()
+        _ = try gate.accept(units[0])
+
+        let idrNALs = try H264AnnexB.split(units[0].data)
+            .filter { ($0[0] & 0x1F) == 5 }
+        var idrOnlyData = Data()
+        for nal in idrNALs {
+            idrOnlyData.append(contentsOf: [0, 0, 0, 1])
+            idrOnlyData.append(nal)
+        }
+        let idrWithoutParameterSets = H264AccessUnit(
+            ptsNanoseconds: 100,
+            isKeyframe: true,
+            discontinuity: true,
+            data: idrOnlyData
+        )
+        XCTAssertEqual(try gate.accept(idrWithoutParameterSets), .suppress)
+        XCTAssertTrue(gate.waitingForKeyframe)
+        XCTAssertTrue(gate.sps.isEmpty)
+        XCTAssertTrue(gate.pps.isEmpty)
+
+        let fresh = H264AccessUnit(
+            ptsNanoseconds: units[0].ptsNanoseconds,
+            isKeyframe: true,
+            discontinuity: false,
+            data: units[0].data
+        )
+        guard case .deliver = try gate.accept(fresh) else {
+            return XCTFail("fresh SPS/PPS-prefixed IDR should recover")
+        }
+    }
+
+    func testExplicitResetRequiresFreshParameterSetsAndIdr() throws {
+        let (_, units) = try fixture()
+        var gate = H264StreamGate()
+        _ = try gate.accept(units[0])
+        XCTAssertFalse(gate.sps.isEmpty)
+        XCTAssertFalse(gate.pps.isEmpty)
+
+        gate.resetForDiscontinuity()
+        XCTAssertTrue(gate.waitingForKeyframe)
+        XCTAssertTrue(gate.sps.isEmpty)
+        XCTAssertTrue(gate.pps.isEmpty)
+
+        let idrNALs = try H264AnnexB.split(units[0].data)
+            .filter { ($0[0] & 0x1F) == 5 }
+        var idrOnlyData = Data()
+        for nal in idrNALs {
+            idrOnlyData.append(contentsOf: [0, 0, 0, 1])
+            idrOnlyData.append(nal)
+        }
+        let staleConfigurationIDR = H264AccessUnit(
+            ptsNanoseconds: 100,
+            isKeyframe: true,
+            discontinuity: false,
+            data: idrOnlyData
+        )
+        XCTAssertEqual(try gate.accept(staleConfigurationIDR), .suppress)
+        XCTAssertTrue(gate.sps.isEmpty)
+        XCTAssertTrue(gate.pps.isEmpty)
+
+        guard case .deliver = try gate.accept(units[0]) else {
+            return XCTFail("fresh SPS/PPS-prefixed IDR should recover after reset")
+        }
+    }
+
     func testParserRejectsMalformedUnits() {
         XCTAssertThrowsError(try H264AnnexB.split(Data()))
         XCTAssertThrowsError(try H264AnnexB.split(Data([1, 2, 3, 4])))

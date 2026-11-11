@@ -71,6 +71,14 @@ final class VideoStreamController: ObservableObject {
 
     /// Feed one access unit. Suppressed units request a keyframe from the host.
     func receive(_ unit: H264AccessUnit) {
+        if unit.discontinuity {
+            // A stream switch starts a new encoder/decoder generation. Flush
+            // already queued sample buffers as well as resetting the H.264 gate;
+            // otherwise frames from the previous target can remain visible.
+            layer.flushAndRemoveImage()
+            formatDescription = nil
+            status = "Stream changed; waiting for a keyframe"
+        }
         do {
             let result = try gate.accept(unit)
             suppressedUnits = gate.suppressed
