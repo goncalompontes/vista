@@ -82,6 +82,15 @@ impl<B: ActionBackend> HostControlChannel<B> {
         &self.lease
     }
 
+    /// Authorize live input against this channel's authenticated session lease.
+    pub fn apply_input(
+        &mut self,
+        event: &crate::capability::InputEvent,
+        geometry_epoch: u64,
+    ) -> Result<Vec<InputEffect>, ContractError> {
+        self.lease.apply_input(event, geometry_epoch)
+    }
+
     pub fn registry(&self) -> &ActionRegistry<B> {
         &self.registry
     }

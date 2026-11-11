@@ -10,9 +10,7 @@
 //! on cancellation or disconnect. A missing `/dev/uinput` permission disables
 //! input instead of pretending it worked.
 
-use crate::capability::{
-    InputEffect, InputEvent, InputLease, InputPermissions, PointerButton, ScrollPhase, ScrollUnit,
-};
+use crate::capability::{InputEffect, InputPermissions, PointerButton, ScrollPhase, ScrollUnit};
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -33,13 +31,11 @@ pub struct StreamGeometry {
 pub struct InputInjector {
     socket: PathBuf,
     daemon: Mutex<Option<Child>>,
-    lease: Mutex<InputLease>,
-    permissions: InputPermissions,
     geometry: Mutex<Option<StreamGeometry>>,
 }
 
 impl InputInjector {
-    pub fn probe(permissions: InputPermissions) -> Result<Self, String> {
+    pub fn probe(_permissions: InputPermissions) -> Result<Self, String> {
         let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
         let socket = Path::new(&runtime).join(format!("vista-ydotool-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&socket);
@@ -59,8 +55,6 @@ impl InputInjector {
                 return Ok(Self {
                     socket,
                     daemon: Mutex::new(Some(daemon)),
-                    lease: Mutex::new(InputLease::new()),
-                    permissions,
                     geometry: Mutex::new(None),
                 });
             }
@@ -79,36 +73,26 @@ impl InputInjector {
         *self.geometry.lock().expect("input geometry") = None;
     }
 
-    pub fn permissions(&self) -> InputPermissions {
-        self.permissions
+    pub fn geometry_epoch(&self) -> Option<u64> {
+        self.geometry
+            .lock()
+            .expect("input geometry")
+            .map(|geometry| geometry.epoch)
     }
 
-    pub fn apply(&self, event: &InputEvent) -> Result<(), String> {
+    /// Apply effects that have already been authorized by the active ControlLease.
+    /// This layer deliberately has no authority to create an input context.
+    pub fn apply_effects(&self, effects: &[InputEffect]) -> Result<(), String> {
         let geometry = *self.geometry.lock().expect("input geometry");
-        let context = crate::capability::InputContext {
-            target: crate::capability::TargetRef::new("stream", "live")
-                .map_err(|error| error.to_string())?,
-            grant_epoch: "live".into(),
-            geometry_epoch: geometry.map(|geometry| geometry.epoch).unwrap_or(1),
-            permissions: self.permissions,
-        };
-        let effects = self
-            .lease
-            .lock()
-            .expect("input lease")
-            .apply(event, &context)
-            .map_err(|error| error.to_string())?;
-        for effect in effects {
+        for effect in effects.iter().cloned() {
             self.apply_effect(effect, geometry)?;
         }
         Ok(())
     }
 
-    pub fn release_all(&self) {
-        let mut lease = self.lease.lock().expect("input lease");
-        let effects = lease.release_all();
-        drop(lease);
-        for effect in effects {
+    /// Best-effort native release effects supplied by the revoked ControlLease.
+    pub fn release_effects(&self, effects: &[InputEffect]) {
+        for effect in effects.iter().cloned() {
             let _ = self.apply_effect(effect, None);
         }
     }
@@ -126,8 +110,7 @@ impl InputInjector {
                 let width = geometry.width.max(1);
                 let height = geometry.height.max(1);
                 let px = ((x * f64::from(width - 1)).round()).clamp(0.0, f64::from(width - 1));
-                let py =
-                    ((y * f64::from(height - 1)).round()).clamp(0.0, f64::from(height - 1));
+                let py = ((y * f64::from(height - 1)).round()).clamp(0.0, f64::from(height - 1));
                 self.run(&[
                     "mousemove".into(),
                     "--absolute".into(),
@@ -181,10 +164,7 @@ impl InputInjector {
             InputEffect::Key { usage, pressed, .. } => {
                 let code = hid_usage_to_evdev(usage)
                     .ok_or_else(|| format!("unsupported HID usage {usage:#04x}"))?;
-                self.run(&[
-                    "key".into(),
-                    format!("{code}:{}", u8::from(pressed)),
-                ])
+                self.run(&["key".into(), format!("{code}:{}", u8::from(pressed))])
             }
             InputEffect::Text { text } => {
                 if text.is_empty() {
@@ -239,7 +219,6 @@ impl InputInjector {
 
 impl Drop for InputInjector {
     fn drop(&mut self) {
-        self.release_all();
         if let Some(mut daemon) = self.daemon.lock().expect("input daemon").take() {
             let _ = daemon.kill();
             let _ = daemon.wait();
@@ -253,8 +232,8 @@ impl Drop for InputInjector {
 /// guessed.
 pub fn hid_usage_to_evdev(usage: u16) -> Option<u16> {
     const LETTERS: [u16; 26] = [
-        30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38, 50, 49, 24, 25, 16, 19, 31, 20, 22, 47,
-        17, 45, 21, 44,
+        30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38, 50, 49, 24, 25, 16, 19, 31, 20, 22, 47, 17,
+        45, 21, 44,
     ];
     const DIGITS: [u16; 10] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
     const FUNCTIONS: [u16; 12] = [59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 87, 88];
@@ -330,5 +309,4 @@ mod tests {
         assert_eq!(normalized_to_pixels(1.0, 1.0, 1920, 1080), (1919, 1079));
         assert_eq!(normalized_to_pixels(2.0, -1.0, 100, 50), (99, 0));
     }
-
 }
