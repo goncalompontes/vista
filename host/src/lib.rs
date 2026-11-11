@@ -6,6 +6,7 @@
 pub mod bridge;
 pub mod capability;
 pub mod capture;
+pub mod capture_identity;
 pub mod catalog;
 pub mod catalog_wire;
 pub mod control_dispatch;
