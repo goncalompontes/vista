@@ -1,8 +1,10 @@
 //! Portable input injection for the authenticated session.
 //!
-//! Pointer and keyboard events are applied through `ydotool`, which writes to
-//! `/dev/uinput` through a private `ydotoold` socket. Text commits use the same
-//! path. This intentionally does not rely on compositor shortcuts, so an
+//! Absolute pointer motion and buttons use a native uinput absolute device.
+//! `ydotool --absolute` approximates positions with accelerated relative
+//! motion and cannot preserve the streamed coordinate transform. Keyboard,
+//! relative motion and text use a private `ydotoold` socket. No compositor
+//! acceleration settings are changed. This does not rely on shortcuts, so an
 //! injected click/keystroke reaches whatever surface is focused, including a
 //! window that the producer fullscreened for streaming.
 //!
@@ -11,6 +13,10 @@
 //! input instead of pretending it worked.
 
 use crate::capability::{InputEffect, InputPermissions, PointerButton, ScrollPhase, ScrollUnit};
+use evdev::{
+    AbsInfo, AbsoluteAxisCode, AttributeSet, EventType, InputEvent, KeyCode, PropType,
+    RelativeAxisCode, UinputAbsSetup, uinput::VirtualDevice,
+};
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -32,10 +38,13 @@ pub struct InputInjector {
     socket: PathBuf,
     daemon: Mutex<Option<Child>>,
     geometry: Mutex<Option<StreamGeometry>>,
+    pointer: Mutex<VirtualDevice>,
 }
 
 impl InputInjector {
     pub fn probe(_permissions: InputPermissions) -> Result<Self, String> {
+        let pointer = absolute_pointer()
+            .map_err(|error| format!("cannot create absolute pointer: {error}"))?;
         let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
         let socket = Path::new(&runtime).join(format!("vista-ydotool-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&socket);
@@ -56,6 +65,7 @@ impl InputInjector {
                     socket,
                     daemon: Mutex::new(Some(daemon)),
                     geometry: Mutex::new(None),
+                    pointer: Mutex::new(pointer),
                 });
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -104,21 +114,10 @@ impl InputInjector {
     ) -> Result<(), String> {
         match effect {
             InputEffect::PointerAbsolute { x, y } => {
-                let Some(geometry) = geometry else {
+                let Some(_) = geometry else {
                     return Err("no stream geometry is active".into());
                 };
-                let width = geometry.width.max(1);
-                let height = geometry.height.max(1);
-                let px = ((x * f64::from(width - 1)).round()).clamp(0.0, f64::from(width - 1));
-                let py = ((y * f64::from(height - 1)).round()).clamp(0.0, f64::from(height - 1));
-                self.run(&[
-                    "mousemove".into(),
-                    "--absolute".into(),
-                    "--xpos".into(),
-                    format!("{px:.0}"),
-                    "--ypos".into(),
-                    format!("{py:.0}"),
-                ])
+                self.emit_pointer(&absolute_position(x, y))
             }
             InputEffect::PointerRelative { dx, dy } => self.run(&[
                 "mousemove".into(),
@@ -128,15 +127,18 @@ impl InputInjector {
                 format!("{dy:.0}"),
             ]),
             InputEffect::Button { button, pressed } => {
-                let base = match button {
-                    PointerButton::Primary => 0x00,
-                    PointerButton::Secondary => 0x01,
-                    PointerButton::Middle => 0x02,
-                    PointerButton::Back => 0x06,
-                    PointerButton::Forward => 0x05,
+                let code = match button {
+                    PointerButton::Primary => KeyCode::BTN_LEFT,
+                    PointerButton::Secondary => KeyCode::BTN_RIGHT,
+                    PointerButton::Middle => KeyCode::BTN_MIDDLE,
+                    PointerButton::Back => KeyCode::BTN_BACK,
+                    PointerButton::Forward => KeyCode::BTN_FORWARD,
                 };
-                let mask = if pressed { 0x40 } else { 0x80 };
-                self.run(&["click".into(), format!("0x{:x}", base | mask)])
+                self.emit_pointer(&[InputEvent::new(
+                    EventType::KEY.0,
+                    code.0,
+                    i32::from(pressed),
+                )])
             }
             InputEffect::Scroll {
                 dx,
@@ -152,13 +154,17 @@ impl InputInjector {
                     return Ok(());
                 }
                 let scale = if unit == ScrollUnit::Line { 1.0 } else { 0.05 };
-                self.run(&[
-                    "mousemove".into(),
-                    "--wheel".into(),
-                    "--xpos".into(),
-                    format!("{:.0}", dx * scale),
-                    "--ypos".into(),
-                    format!("{:.0}", dy * scale),
+                self.emit_pointer(&[
+                    InputEvent::new(
+                        EventType::RELATIVE.0,
+                        RelativeAxisCode::REL_HWHEEL.0,
+                        (dx * scale).round() as i32,
+                    ),
+                    InputEvent::new(
+                        EventType::RELATIVE.0,
+                        RelativeAxisCode::REL_WHEEL.0,
+                        (dy * scale).round() as i32,
+                    ),
                 ])
             }
             InputEffect::Key { usage, pressed, .. } => {
@@ -199,6 +205,14 @@ impl InputInjector {
         }
     }
 
+    fn emit_pointer(&self, events: &[InputEvent]) -> Result<(), String> {
+        self.pointer
+            .lock()
+            .expect("absolute pointer")
+            .emit(events)
+            .map_err(|error| format!("absolute pointer injection failed: {error}"))
+    }
+
     fn run(&self, arguments: &[String]) -> Result<(), String> {
         let output = Command::new("ydotool")
             .env("YDOTOOL_SOCKET", &self.socket)
@@ -215,6 +229,42 @@ impl InputInjector {
             ))
         }
     }
+}
+
+fn absolute_pointer() -> std::io::Result<VirtualDevice> {
+    let range = AbsInfo::new(0, 0, 65_535, 0, 0, 0);
+    VirtualDevice::builder()?
+        .name("Vista absolute pointer")
+        .with_properties(&AttributeSet::from_iter([PropType::POINTER]))?
+        .with_keys(&AttributeSet::from_iter([
+            KeyCode::BTN_LEFT,
+            KeyCode::BTN_RIGHT,
+            KeyCode::BTN_MIDDLE,
+            KeyCode::BTN_BACK,
+            KeyCode::BTN_FORWARD,
+        ]))?
+        .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode::ABS_X, range))?
+        .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode::ABS_Y, range))?
+        .with_relative_axes(&AttributeSet::from_iter([
+            RelativeAxisCode::REL_WHEEL,
+            RelativeAxisCode::REL_HWHEEL,
+        ]))?
+        .build()
+}
+
+fn absolute_position(x: f64, y: f64) -> [InputEvent; 2] {
+    [
+        InputEvent::new(
+            EventType::ABSOLUTE.0,
+            AbsoluteAxisCode::ABS_X.0,
+            (x.clamp(0.0, 1.0) * 65_535.0).round() as i32,
+        ),
+        InputEvent::new(
+            EventType::ABSOLUTE.0,
+            AbsoluteAxisCode::ABS_Y.0,
+            (y.clamp(0.0, 1.0) * 65_535.0).round() as i32,
+        ),
+    ]
 }
 
 impl Drop for InputInjector {
@@ -308,5 +358,16 @@ mod tests {
         assert_eq!(normalized_to_pixels(0.0, 0.0, 1920, 1080), (0, 0));
         assert_eq!(normalized_to_pixels(1.0, 1.0, 1920, 1080), (1919, 1079));
         assert_eq!(normalized_to_pixels(2.0, -1.0, 100, 50), (99, 0));
+    }
+
+    #[test]
+    fn absolute_pointer_uses_kernel_axes_without_accelerated_relative_motion() {
+        let events = absolute_position(0.5, 1.0);
+        assert_eq!(events[0].event_type(), EventType::ABSOLUTE);
+        assert_eq!(events[0].code(), AbsoluteAxisCode::ABS_X.0);
+        assert_eq!(events[0].value(), 32_768);
+        assert_eq!(events[1].code(), AbsoluteAxisCode::ABS_Y.0);
+        assert_eq!(events[1].value(), 65_535);
+        assert_eq!(absolute_position(-0.1, 1.1)[0].value(), 0);
     }
 }
