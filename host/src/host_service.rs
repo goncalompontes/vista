@@ -431,6 +431,14 @@ fn serve_client(
                         if let Some(mut old) = producer.take() {
                             old.stop();
                         }
+                        if let Some(control) = host.control_mut() {
+                            let releases = control.revoke();
+                            if let Some(injector) = &injector {
+                                injector.release_effects(&releases);
+                                injector.clear_geometry();
+                            }
+                        }
+                        target = None;
                         shared.begin();
                         if let Err(error) = validate_target(&selected) {
                             let envelope = host
@@ -445,9 +453,6 @@ fn serve_client(
                             continue;
                         }
                         capability_revision = capability_revision.saturating_add(1);
-                        if let Some(control) = host.control_mut() {
-                            control.revoke();
-                        }
                         attach_target(
                             &mut host,
                             &session_id,
@@ -468,6 +473,13 @@ fn serve_client(
                                 started_epoch = 0;
                             }
                             Err(error) => {
+                                if let Some(control) = host.control_mut() {
+                                    let releases = control.revoke();
+                                    if let Some(injector) = &injector {
+                                        injector.release_effects(&releases);
+                                        injector.clear_geometry();
+                                    }
+                                }
                                 let envelope = host
                                     .emit(ControlMessage::StreamError {
                                         v: 1,
@@ -486,8 +498,12 @@ fn serve_client(
                         }
                         target = None;
                         shared.begin();
-                        if let Some(injector) = &injector {
-                            injector.clear_geometry();
+                        if let Some(control) = host.control_mut() {
+                            let releases = control.revoke();
+                            if let Some(injector) = &injector {
+                                injector.release_effects(&releases);
+                                injector.clear_geometry();
+                            }
                         }
                         let envelope = host
                             .emit(ControlMessage::StreamStopped {
@@ -504,7 +520,14 @@ fn serve_client(
                     ControlMessage::InputEvent { event, .. } => {
                         if let Some(injector) = &injector {
                             input_events = input_events.saturating_add(1);
-                            if let Err(error) = injector.apply(&event) {
+                            let result = apply_live_input(
+                                host.control_mut(),
+                                &event,
+                                injector.geometry_epoch(),
+                                |effects| injector.apply_effects(effects),
+                                |effects| injector.release_effects(effects),
+                            );
+                            if let Err(error) = result {
                                 eprintln!("vista-host: input rejected: {error}");
                             }
                         } else {
@@ -568,6 +591,13 @@ fn serve_client(
                 old.stop();
             }
             target = None;
+            if let Some(control) = host.control_mut() {
+                let releases = control.revoke();
+                if let Some(injector) = &injector {
+                    injector.release_effects(&releases);
+                    injector.clear_geometry();
+                }
+            }
             let envelope = host
                 .emit(ControlMessage::StreamError {
                     v: 1,
@@ -591,11 +621,11 @@ fn serve_client(
         old.stop();
     }
     if let Some(control) = host.control_mut() {
-        control.revoke();
-    }
-    if let Some(injector) = &injector {
-        injector.release_all();
-        injector.clear_geometry();
+        let releases = control.revoke();
+        if let Some(injector) = &injector {
+            injector.release_effects(&releases);
+            injector.clear_geometry();
+        }
     }
     shared.close();
     let (frames, bytes, dropped) = shared.stats();
@@ -618,6 +648,28 @@ fn serve_client(
         input_events,
         reason,
     })
+}
+
+/// The sole live input path: authorization is performed by the authenticated
+/// channel lease before the injector callback can observe any effects.
+fn apply_live_input(
+    control: Option<&mut HostControlChannel>,
+    event: &crate::capability::InputEvent,
+    geometry_epoch: Option<u64>,
+    mut inject: impl FnMut(&[crate::capability::InputEffect]) -> Result<(), String>,
+    mut release: impl FnMut(&[crate::capability::InputEffect]),
+) -> Result<(), String> {
+    let geometry_epoch = geometry_epoch.ok_or_else(|| "no active stream geometry".to_string())?;
+    let control = control.ok_or_else(|| "no active control lease".to_string())?;
+    let effects = control
+        .apply_input(event, geometry_epoch)
+        .map_err(|error| format!("authorization failed: {error}"))?;
+    if let Err(error) = inject(&effects) {
+        let releases = control.revoke();
+        release(&releases);
+        return Err(format!("native input injection failed: {error}"));
+    }
+    Ok(())
 }
 
 fn host_handshake(wire: &mut Wire, host: &mut HostSession) -> Result<(), String> {
@@ -1077,6 +1129,122 @@ pub fn read_media_record(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        capability::{
+            ActionGrants, ActionRegistry, FakeActionBackend, InputPermissions, TargetRef,
+        },
+        control_lease::ControlLease,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn input_control() -> HostControlChannel {
+        let lease = ControlLease::grant(
+            "session-1",
+            Some("session-1".into()),
+            TargetRef::new("w5", "generation-5").unwrap(),
+            ActionGrants::default(),
+            InputPermissions {
+                pointer: true,
+                keyboard: true,
+                text: true,
+            },
+        )
+        .unwrap();
+        let backend: Box<dyn crate::capability::ActionBackend + Send> =
+            Box::new(FakeActionBackend::default());
+        HostControlChannel::new(ActionRegistry::new(backend), lease, 1).unwrap()
+    }
+
+    fn key_down() -> crate::capability::InputEvent {
+        crate::capability::InputEvent::KeyPhysical {
+            usage: 4,
+            pressed: true,
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn live_input_without_lease_or_geometry_has_no_injection_side_effects() {
+        let calls = AtomicUsize::new(0);
+        let mut inject = |_effects: &[crate::capability::InputEffect]| -> Result<(), String> {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        };
+        let mut release = |_effects: &[crate::capability::InputEffect]| {};
+        assert!(apply_live_input(None, &key_down(), Some(3), &mut inject, &mut release).is_err());
+        let mut control = input_control();
+        assert!(
+            apply_live_input(
+                Some(&mut control),
+                &key_down(),
+                None,
+                &mut inject,
+                &mut release
+            )
+            .is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn revoked_and_stale_geometry_input_never_reaches_injector() {
+        let calls = AtomicUsize::new(0);
+        let mut inject = |_effects: &[crate::capability::InputEffect]| -> Result<(), String> {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        };
+        let mut release = |_effects: &[crate::capability::InputEffect]| {};
+        let mut revoked = input_control();
+        revoked.revoke();
+        assert!(
+            apply_live_input(
+                Some(&mut revoked),
+                &key_down(),
+                Some(3),
+                &mut inject,
+                &mut release
+            )
+            .is_err()
+        );
+        let mut stale = input_control();
+        let event = crate::capability::InputEvent::PointerAbsolute {
+            x: 0.5,
+            y: 0.5,
+            geometry_epoch: 2,
+        };
+        assert!(
+            apply_live_input(Some(&mut stale), &event, Some(3), &mut inject, &mut release).is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn injection_failure_revokes_and_releases_every_held_input() {
+        let mut control = input_control();
+        let injected = AtomicUsize::new(0);
+        let released = AtomicUsize::new(0);
+        let mut inject = |effects: &[crate::capability::InputEffect]| {
+            injected.fetch_add(effects.len(), Ordering::SeqCst);
+            Err("fake native failure".to_string())
+        };
+        let mut release = |effects: &[crate::capability::InputEffect]| {
+            released.fetch_add(effects.len(), Ordering::SeqCst);
+        };
+        assert!(
+            apply_live_input(
+                Some(&mut control),
+                &key_down(),
+                Some(3),
+                &mut inject,
+                &mut release
+            )
+            .is_err()
+        );
+        assert_eq!(injected.load(Ordering::SeqCst), 1);
+        assert_eq!(released.load(Ordering::SeqCst), 1);
+        assert!(!control.lease().is_active());
+        assert!(!control.lease().held_input());
+    }
 
     #[test]
     fn serve_rejects_public_listener_without_opt_in() {

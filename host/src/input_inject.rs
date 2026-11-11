@@ -10,9 +10,7 @@
 //! on cancellation or disconnect. A missing `/dev/uinput` permission disables
 //! input instead of pretending it worked.
 
-use crate::capability::{
-    InputEffect, InputEvent, InputLease, InputPermissions, PointerButton, ScrollPhase, ScrollUnit,
-};
+use crate::capability::{InputEffect, InputPermissions, PointerButton, ScrollPhase, ScrollUnit};
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -33,13 +31,11 @@ pub struct StreamGeometry {
 pub struct InputInjector {
     socket: PathBuf,
     daemon: Mutex<Option<Child>>,
-    lease: Mutex<InputLease>,
-    permissions: InputPermissions,
     geometry: Mutex<Option<StreamGeometry>>,
 }
 
 impl InputInjector {
-    pub fn probe(permissions: InputPermissions) -> Result<Self, String> {
+    pub fn probe(_permissions: InputPermissions) -> Result<Self, String> {
         let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
         let socket = Path::new(&runtime).join(format!("vista-ydotool-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&socket);
@@ -59,8 +55,6 @@ impl InputInjector {
                 return Ok(Self {
                     socket,
                     daemon: Mutex::new(Some(daemon)),
-                    lease: Mutex::new(InputLease::new()),
-                    permissions,
                     geometry: Mutex::new(None),
                 });
             }
@@ -79,36 +73,26 @@ impl InputInjector {
         *self.geometry.lock().expect("input geometry") = None;
     }
 
-    pub fn permissions(&self) -> InputPermissions {
-        self.permissions
+    pub fn geometry_epoch(&self) -> Option<u64> {
+        self.geometry
+            .lock()
+            .expect("input geometry")
+            .map(|geometry| geometry.epoch)
     }
 
-    pub fn apply(&self, event: &InputEvent) -> Result<(), String> {
+    /// Apply effects that have already been authorized by the active ControlLease.
+    /// This layer deliberately has no authority to create an input context.
+    pub fn apply_effects(&self, effects: &[InputEffect]) -> Result<(), String> {
         let geometry = *self.geometry.lock().expect("input geometry");
-        let context = crate::capability::InputContext {
-            target: crate::capability::TargetRef::new("stream", "live")
-                .map_err(|error| error.to_string())?,
-            grant_epoch: "live".into(),
-            geometry_epoch: geometry.map(|geometry| geometry.epoch).unwrap_or(1),
-            permissions: self.permissions,
-        };
-        let effects = self
-            .lease
-            .lock()
-            .expect("input lease")
-            .apply(event, &context)
-            .map_err(|error| error.to_string())?;
-        for effect in effects {
+        for effect in effects.iter().cloned() {
             self.apply_effect(effect, geometry)?;
         }
         Ok(())
     }
 
-    pub fn release_all(&self) {
-        let mut lease = self.lease.lock().expect("input lease");
-        let effects = lease.release_all();
-        drop(lease);
-        for effect in effects {
+    /// Best-effort native release effects supplied by the revoked ControlLease.
+    pub fn release_effects(&self, effects: &[InputEffect]) {
+        for effect in effects.iter().cloned() {
             let _ = self.apply_effect(effect, None);
         }
     }
@@ -235,7 +219,6 @@ impl InputInjector {
 
 impl Drop for InputInjector {
     fn drop(&mut self) {
-        self.release_all();
         if let Some(mut daemon) = self.daemon.lock().expect("input daemon").take() {
             let _ = daemon.kill();
             let _ = daemon.wait();
