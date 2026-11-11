@@ -80,6 +80,32 @@ For a physical phone, use a trusted LAN and an explicit remote listener
 (`--listen 0.0.0.0:7443 --allow-remote`). Allow both the listener and announced
 media port. Physical Android hardware has not been verified.
 
+## Emulator on this Linux host
+
+The stock `VistaPixel` AVD was configured for 2.5 GB RAM with `hw.gpu.enabled=no`
+and was cold-booted with `-no-snapshot-load` on every run. Android 36 with the
+Google-APIs image then starved SystemUI under software rendering and showed
+"System UI isn't responding" during boot, which blocked taps. KVM itself was
+available (`/dev/kvm` is writable), so this was guest resource/GPU
+configuration, not missing hardware acceleration.
+
+`client/android/emulator.sh` applies a working configuration idempotently
+(4 GB guest RAM, 6 vCPUs, host GPU, hardware keyboard, persistent userdata) and
+launches with quickboot. On the T3 workstation this reduced a cold boot from
+1–2 minutes with ANR dialogs to about 15 seconds with no ANR. Emulator 37
+declares `-scale` obsolete, so the script no longer passes it.
+
+```sh
+client/android/emulator.sh --wait      # windowed, host GPU, waits for boot
+client/android/emulator.sh --headless  # agents/CI: no window, swiftshader
+client/android/emulator.sh --cold      # ignore the quickboot snapshot
+client/android/emulator.sh --stop
+```
+
+If host GL fails on another machine, use `--headless` (swiftshader) or create an
+AVD from the lighter AOSP image (`system-images;android-36;default;x86_64`);
+the Google-APIs image is substantially heavier.
+
 ## Opt-in emulator check
 
 Boot an Android 36 emulator, install the app and instrumentation APK, build
