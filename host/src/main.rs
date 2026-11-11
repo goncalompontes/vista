@@ -1327,8 +1327,9 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
             "--h264",
             "--pointer",
             "--text",
+            "--action",
         ],
-        &["--json", "--allow-input"],
+        &["--json", "--allow-input", "--allow-action"],
     )?;
     let connect = option(args, "--connect")
         .ok_or_else(|| NiriError::InvalidArgument("live-client requires --connect".into()))?;
@@ -1360,6 +1361,18 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
         None => (0.5, 0.5),
     };
     let allow_input = args.contains(&"--allow-input");
+    let action = option(args, "--action");
+    let allow_action = args.contains(&"--allow-action");
+    if action.is_some() && !allow_action {
+        return Err(NiriError::InvalidArgument(
+            "--action requires explicit --allow-action opt-in".into(),
+        ));
+    }
+    if allow_action && action.is_none() {
+        return Err(NiriError::InvalidArgument(
+            "--allow-action requires an explicit --action ID".into(),
+        ));
+    }
     let permissions = protocol::PermissionSet {
         video: true,
         input: allow_input,
@@ -1479,6 +1492,19 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
         client.close("live client incomplete");
         return Err(NiriError::Unavailable(error));
     }
+    let action_result = if let Some(action_id) = action {
+        Some(
+            client
+                .invoke_advertised_action(
+                    action_id,
+                    std::collections::BTreeMap::new(),
+                    allow_action,
+                )
+                .map_err(|error| NiriError::Unavailable(format!("action invocation: {error}")))?,
+        )
+    } else {
+        None
+    };
     client.close("live client complete");
     let elapsed = started.elapsed();
     let report = serde_json::json!({
@@ -1492,7 +1518,13 @@ fn live_client_command(args: &[&str], json: bool) -> Result<(), NiriError> {
         "elapsed_ms": elapsed.as_millis(),
         "h264": h264_path,
         "pointer": { "x": pointer.0, "y": pointer.1, "sent": sent_input_ok },
-        "verified": received > 0,
+        "action": action_result.as_ref().map(|result| serde_json::json!({
+            "id": result.id,
+            "status": result.status,
+            "error_code": result.error_code,
+            "completed": result.status == capability::ActionStatus::Completed,
+        })),
+        "verified": received > 0 && action_result.as_ref().is_none_or(|result| result.status == capability::ActionStatus::Completed),
     });
     if json {
         println!("{}", serde_json::to_string(&report)?);

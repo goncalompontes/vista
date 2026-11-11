@@ -54,8 +54,12 @@ Not yet demonstrated anywhere:
 
 - A semantic action (`action.invoke`) reaching a real desktop through the
   transport. One absolute pointer event now passes the encrypted channel, the
-  lease and the injector (see [input-verification.md](input-verification.md)),
-  but no action, click, drag or text commit has been exercised end to end.
+  lease and the injector (see [input-verification.md](input-verification.md)).
+  The reference-client action path and deterministic fake-backend socket tests
+  now cover authenticated dispatch and truthful outcomes; neither is evidence
+  that Niri performed a real action. See
+  [action-verification.md](action-verification.md) for the opt-in manual check
+  and its evidence boundary.
 - Native-client playback beyond the 2026-11-10 iOS run recorded in the README:
   no sustained iOS session, no Android runtime playback, no decoder recovery
   evidence from a real device.
@@ -191,12 +195,14 @@ client cannot see or affect the host desktop.
 | Encoder diagnostics + reference-client end-to-end evidence | #97 | merged |
 | Reference-client completion and clean-shutdown semantics (real desktop, workspace and window targets) | #98 | merged |
 | Skip-transpilable framing and view defaults | #99 | merged |
-| Input path: pointer event through the transport, lease and injector | this change | open |
+| Input path: pointer event through the transport, lease and injector | #100 | merged |
+| Semantic action transport verification and truthful result accounting | #101 | open; implementation in progress |
 
 ### Next steps
 
-1. Prove one action and one input event reaching a real desktop through the
-   transport, with an opt-in run that states exactly what moved.
+1. Complete deterministic authenticated socket verification for semantic
+   action dispatch and truthful outcomes; then perform the separate opt-in Niri
+   action check documented in [action-verification.md](action-verification.md).
 2. Reconcile the Android client with the shared core: the `VistaCore` sources are
    `#if !SKIP`-guarded, so the Skip build transpiles the UI but not the protocol
    types, and a clean transpile currently needs a documented path fix.

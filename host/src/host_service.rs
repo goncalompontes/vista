@@ -416,7 +416,13 @@ fn serve_client(
                     .handle(&envelope, unix_now())
                     .map_err(|error| format!("control message rejected: {error}"))?;
                 if let Some(response) = response {
-                    if matches!(&response.body, ControlMessage::ActionResult { .. }) {
+                    if matches!(
+                        &response.body,
+                        ControlMessage::ActionResult {
+                            status: crate::capability::ActionStatus::Completed,
+                            ..
+                        }
+                    ) {
                         actions_completed = actions_completed.saturating_add(1);
                     }
                     wire.write_envelope(&response)?;
@@ -541,10 +547,6 @@ fn serve_client(
                                 .map_err(|error| format!("input error: {error}"))?;
                             wire.write_envelope(&envelope)?;
                         }
-                    }
-                    ControlMessage::ActionResult { .. } => {
-                        actions_completed = actions_completed.saturating_add(1);
-                        send_catalog(&mut host, &mut wire, &session_id, &mut revision)?;
                     }
                     ControlMessage::SessionClose { .. } => {
                         reason = "client closed the session".into();
@@ -975,6 +977,7 @@ pub struct LiveClient {
     wire: Wire,
     pub(crate) client: ClientSession,
     pub media: Option<MediaOfferInfo>,
+    capability_snapshot: Option<crate::capability::CapabilitySnapshot>,
     pub last_geometry_epoch: Option<u64>,
 }
 
@@ -1019,6 +1022,7 @@ impl LiveClient {
             .accept_session_opened(&opened)
             .map_err(|error| format!("session opened: {error}"))?;
         let mut media = None;
+        let mut capability_snapshot = None;
         while media.is_none() {
             let envelope = wire.read_envelope_blocking()?;
             match &envelope.body {
@@ -1043,9 +1047,11 @@ impl LiveClient {
                         .map_err(|error| format!("catalog: {error}"))?;
                 }
                 ControlMessage::CapabilitySnapshot { .. } => {
-                    client
-                        .accept_capability_snapshot(&envelope)
-                        .map_err(|error| format!("capabilities: {error}"))?;
+                    capability_snapshot = Some(
+                        client
+                            .accept_capability_snapshot(&envelope)
+                            .map_err(|error| format!("capabilities: {error}"))?,
+                    );
                 }
                 other => {
                     return Err(format!("unexpected message {}", other.name()));
@@ -1056,6 +1062,7 @@ impl LiveClient {
             wire,
             client,
             media,
+            capability_snapshot,
             last_geometry_epoch: None,
         })
     }
@@ -1073,7 +1080,101 @@ impl LiveClient {
     }
 
     pub fn poll_control(&mut self) -> Result<Option<Envelope>, String> {
-        self.wire.read_envelope()
+        let Some(envelope) = self.wire.read_envelope()? else {
+            return Ok(None);
+        };
+        if matches!(envelope.body, ControlMessage::CapabilitySnapshot { .. }) {
+            let snapshot = self
+                .client
+                .accept_capability_snapshot(&envelope)
+                .map_err(|error| format!("capabilities: {error}"))?;
+            self.capability_snapshot = Some(snapshot);
+        } else {
+            self.client
+                .accept_server_event(&envelope)
+                .map_err(|error| format!("control sequence: {error}"))?;
+        }
+        Ok(Some(envelope))
+    }
+
+    /// Invoke one action explicitly selected by the caller from this authenticated
+    /// session's latest host-advertised capability snapshot. Context is never caller supplied.
+    pub fn invoke_advertised_action(
+        &mut self,
+        action_id: &str,
+        parameters: std::collections::BTreeMap<String, serde_json::Value>,
+        explicitly_opted_in: bool,
+    ) -> Result<crate::capability::ActionResult, String> {
+        use crate::capability::{ActionContext, ActionGrants, ActionRequest};
+        if !explicitly_opted_in {
+            return Err("action invocation requires explicit --allow-action opt-in".into());
+        }
+        let snapshot = self
+            .capability_snapshot
+            .as_ref()
+            .ok_or("host did not advertise an action capability snapshot")?;
+        let descriptor = snapshot
+            .action(action_id)
+            .ok_or_else(|| format!("action {action_id:?} is not advertised by the host"))?;
+        if !descriptor.supported
+            || !descriptor.enabled
+            || descriptor.authorization != crate::capability::Authorization::Granted
+        {
+            return Err(format!(
+                "action {action_id:?} is not currently enabled and granted"
+            ));
+        }
+        let context = ActionContext {
+            connection_epoch: snapshot.connection_epoch.clone(),
+            session_id: snapshot
+                .session_id
+                .clone()
+                .or_else(|| self.client.session_id().map(str::to_owned)),
+            grant_epoch: snapshot.grant_epoch.clone(),
+            target: snapshot.target(),
+            capability_revision: snapshot.capability_revision,
+            grants: ActionGrants::default(),
+        };
+        let request_id = format!("live-action-{}", self.client.next_client_seq());
+        let request = ActionRequest::new(
+            request_id.clone(),
+            &context,
+            action_id,
+            descriptor.schema_version,
+            parameters,
+        )
+        .map_err(|error| format!("invalid action parameters: {error}"))?;
+        let expected_session = request.session_id.clone();
+        let expected_epoch = request.connection_epoch.clone();
+        let invoke = self
+            .client
+            .action_invoke(&request)
+            .map_err(|error| error.to_string())?;
+        self.wire.write_envelope(&invoke)?;
+        let deadline = Instant::now() + IO_TIMEOUT;
+        loop {
+            if Instant::now() >= deadline {
+                return Err("action outcome_unknown: timed out waiting for action.result; do not retry automatically".into());
+            }
+            let reply = self.wire.read_envelope_blocking()?;
+            if matches!(reply.body, ControlMessage::CatalogSnapshot { .. }) {
+                self.client
+                    .accept_catalog_snapshot(&reply)
+                    .map_err(|error| error.to_string())?;
+                continue;
+            }
+            let result = self
+                .client
+                .accept_action_result(&reply)
+                .map_err(|error| error.to_string())?;
+            if result.id != request_id
+                || result.session_id != expected_session
+                || result.connection_epoch != expected_epoch
+            {
+                return Err("action outcome_unknown: action.result correlation mismatch; do not retry automatically".into());
+            }
+            return Ok(result);
+        }
     }
 
     pub fn send_input(&mut self, event: crate::capability::InputEvent) -> Result<(), String> {

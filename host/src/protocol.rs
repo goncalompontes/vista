@@ -1373,6 +1373,10 @@ impl ClientSession {
         self.session_id.as_deref()
     }
 
+    pub fn accept_server_event(&mut self, envelope: &Envelope) -> Result<(), ProtocolError> {
+        self.check_host_sequence(envelope)
+    }
+
     fn check_host_sequence(&mut self, envelope: &Envelope) -> Result<(), ProtocolError> {
         if envelope.seq != self.expected_host_seq {
             self.state = ClientState::Failed;
