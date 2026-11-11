@@ -19,6 +19,6 @@ let package = Package(
                 )
             ]
         ),
-        .testTarget(name: "VistaCoreTests", dependencies: ["VistaCore"])
+        .testTarget(name: "VistaCoreTests", dependencies: ["VistaCore"], resources: [.copy("Fixtures")])
     ]
 )

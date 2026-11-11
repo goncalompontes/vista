@@ -1,0 +1,53 @@
+import SwiftUI
+import VistaCore
+
+/// Deliberately separate from production pairing and transport. Fake effects
+/// are never dispatched. This surface exposes reducer semantics for review.
+struct ClientStatePreviewView: View {
+    @State private var scenario = 0
+    private var state: ClientAppState { ClientFakeHost.state(scenario) }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Offline fake host · No remote effects")
+                        .font(.headline)
+                    Text("Statuses below are simulated. No host is paired and no video is decoded.")
+                        .font(.footnote)
+                    Picker("Scenario", selection: $scenario) {
+                        ForEach(0..<ClientFakeHost.names.count, id: \.self) { index in
+                            Text(ClientFakeHost.names[index]).tag(index)
+                        }
+                    }
+                }
+                Section("Host and pairing") {
+                    Text(state.hostName)
+                    Text("Trust: \(state.trust.rawValue)")
+                    Text(state.authenticated ? "Authenticated control (simulated)" : "Pair with host to continue")
+                    if let warning = state.warning { Text(warning) }
+                }
+                Section("Library") {
+                    ForEach(state.librarySections, id: \.self) { section in Text(section) }
+                    if state.librarySections.isEmpty {
+                        Text(state.authenticated ? "Waiting for authorized catalog and capabilities" : "Private catalog hidden")
+                    }
+                    if state.librarySections.contains("Choose Window") {
+                        Text("Choose on host · Requires explicit host consent")
+                    }
+                }
+                Section("Stream and permissions") {
+                    Text(state.streamStatus)
+                    Text(state.sourceLabel)
+                    Text(state.inputScopeLabel)
+                    Text(state.canSendInput ? "Input permitted by grant and lease" : "Input disabled · View-only")
+                    Text(state.canRequestControl ? "Control may be requested" : "Control unavailable or already leased")
+                    Text(state.canReadClipboard ? "Remote clipboard read permitted" : "Remote clipboard read disabled")
+                    Text(state.canWriteClipboard ? "Remote clipboard write permitted" : "Remote clipboard write disabled")
+                    if state.media == .recovering { Text("Request a new keyframe to recover") }
+                }
+            }
+            .navigationTitle("State preview")
+        }
+    }
+}
