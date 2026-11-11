@@ -34,14 +34,14 @@ struct LibraryView: View {
     var streamTarget: StreamTarget?
     var streamMessage: String?
     var inputEnabled = false
-    var geometryEpoch: UInt64 = 1
+    var geometryEpoch: UInt64 = UInt64(1)
     var onInvoke: ((String) -> Void)?
     var onSelectStream: ((StreamTarget) -> Void)?
     var onStopStream: (() -> Void)?
     var onInput: ((PortableInputEvent) -> Void)?
 #if !SKIP
     var mediaRecords: [H264AccessUnit] = []
-    var mediaRecordSequence: UInt64 = 0
+    var mediaRecordSequence: UInt64 = UInt64(0)
     var onKeyframeNeeded: (() -> Void)?
 #endif
     @State private var filter: LibraryFilter = .all

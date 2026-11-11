@@ -12,7 +12,7 @@ struct VideoStreamView: View {
     let mediaRecordSequence: UInt64
     let onKeyframeNeeded: (() -> Void)?
     @StateObject private var controller = VideoStreamController()
-    @State private var consumedMediaSequence: UInt64 = 0
+    @State private var consumedMediaSequence: UInt64 = UInt64(0)
 
     var body: some View {
         VStack(spacing: 12) {
