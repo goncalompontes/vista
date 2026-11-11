@@ -1,0 +1,450 @@
+// NOT CANONICAL. DESIGN CANDIDATE ONLY — ADR 0005 defers protobuf adoption.
+// The implemented v1 prototype remains the JSON contract in docs/protocol.md.
+// This schema describes a proposed future TLS/WebRTC protocol and is not a
+// field-for-field encoding of the current Rust/Swift JSON protocol.
+// See docs/adr/0005-canonical-schema-ownership.md and
+// docs/design/canonical-protocol-spec.md. Do not use in production clients.
+syntax = "proto3";
+package vista.v1;
+
+// These are Vista domain identities. All are scoped to an authenticated host;
+// 16-byte opaque IDs are preferred, and NEVER native compositor/OS identifiers.
+message ProtocolVersion { uint32 major = 1; uint32 minor = 2; }
+message ProtocolRange { ProtocolVersion min = 1; ProtocolVersion max = 2; }
+message Feature { string id = 1; uint32 revision = 2; bool must_support = 3; }
+message HostRef { bytes identity_fingerprint = 1; }
+message TargetRef {
+  bytes id = 1;
+  bytes session_id = 2;           // empty for host-owned targets
+  uint64 generation = 3;          // nonzero within connection generation
+  TargetKind kind = 4;
+}
+enum TargetKind {
+  TARGET_KIND_UNSPECIFIED = 0;
+  TARGET_CATALOG_WINDOW = 1;
+  TARGET_PORTAL_SELECTION = 2;
+  TARGET_MANAGED_APPLICATION = 3;
+  TARGET_DISPLAY = 4;
+  TARGET_LAUNCHABLE_APPLICATION = 5;
+}
+enum PermissionKind {
+  PERMISSION_UNSPECIFIED = 0;
+  PERMISSION_CATALOG_VIEW = 1;
+  PERMISSION_VIDEO_VIEW = 2;
+  PERMISSION_AUDIO_LISTEN = 3;
+  PERMISSION_INPUT_CONTROL = 4;
+  PERMISSION_DESKTOP_ACTIONS = 5;
+  PERMISSION_CLIPBOARD_READ = 6;
+  PERMISSION_CLIPBOARD_WRITE = 7;
+  PERMISSION_APP_LAUNCH = 8;
+  PERMISSION_MENUS_READ = 9;
+  PERMISSION_MENUS_INVOKE = 10;
+}
+enum PermissionState {
+  PERMISSION_STATE_UNSPECIFIED = 0;
+  PERMISSION_UNSUPPORTED = 1;
+  PERMISSION_REQUIRED = 2;
+  PERMISSION_PENDING = 3;
+  PERMISSION_GRANTED = 4;
+  PERMISSION_DENIED = 5;
+  PERMISSION_REVOKED = 6;
+}
+enum Availability {
+  AVAILABILITY_UNSPECIFIED = 0;
+  AVAILABILITY_AVAILABLE = 1;
+  AVAILABILITY_CONSENT_REQUIRED = 2;
+  AVAILABILITY_TEMPORARILY_UNAVAILABLE = 3;
+  AVAILABILITY_UNSUPPORTED = 4;
+}
+enum InputScope {
+  INPUT_SCOPE_UNSPECIFIED = 0;
+  INPUT_SCOPE_SHARED_DESKTOP = 1;
+  INPUT_SCOPE_MANAGED_SESSION = 2;
+  INPUT_SCOPE_VERIFIED_WINDOW = 3;
+}
+enum StreamSourceKind {
+  STREAM_SOURCE_UNSPECIFIED = 0;
+  STREAM_SOURCE_WINDOW = 1;
+  STREAM_SOURCE_MONITOR = 2;
+  STREAM_SOURCE_VIRTUAL = 3;
+  STREAM_SOURCE_MANAGED_SESSION = 4;
+}
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_INVALID_MESSAGE = 1;
+  ERROR_UNSUPPORTED_VERSION = 2;
+  ERROR_UNSUPPORTED_FEATURE = 3;
+  ERROR_UNAUTHENTICATED = 4;
+  ERROR_NOT_AUTHORIZED = 5;
+  ERROR_CONSENT_REQUIRED = 6;
+  ERROR_CONSENT_DENIED = 7;
+  ERROR_PROVIDER_UNAVAILABLE = 8;
+  ERROR_TARGET_STALE = 9;
+  ERROR_GRANT_STALE = 10;
+  ERROR_PERMISSION_REVOKED = 11;
+  ERROR_LEASE_BUSY = 12;
+  ERROR_LEASE_EXPIRED = 13;
+  ERROR_SCOPE_MISMATCH = 14;
+  ERROR_CAPABILITY_STALE = 15;
+  ERROR_REVISION_GAP = 16;
+  ERROR_RATE_LIMITED = 17;
+  ERROR_RESOURCE_EXHAUSTED = 18;
+  ERROR_SESSION_CLOSED = 19;
+  ERROR_DEADLINE_EXCEEDED = 20;
+  ERROR_INTERNAL = 21;
+  ERROR_UNSUPPORTED_OPERATION = 22;
+}
+message VistaError {
+  ErrorCode code = 1;
+  string message_key = 2;        // stable localization key, no secrets
+  optional uint32 retry_after_ms = 3;
+  bytes correlation_id = 4;      // logs contain only this, never raw payload
+}
+
+// Two distinct TLS authorization paths: enrollment uses QR-pinned server TLS
+// and allows ONLY pairing hello/enrollment; signaling uses enrolled-client mTLS.
+// RtcSignal MUST be refused on enrollment path before authenticated client TLS.
+// No catalog, capability or raw input messages are valid before authentication.
+message BootstrapEnvelope {
+  ProtocolVersion version = 1;
+  bytes request_id = 2;
+  oneof message {
+    BootstrapHello hello = 10;
+    BootstrapHelloResult hello_result = 11;
+    PairingEnroll pairing_enroll = 12;
+    PairingResult pairing_result = 13;
+    RtcSignal rtc_signal = 14;
+    SignalingError error = 15;
+  }
+}
+message BootstrapHello {
+  ProtocolRange supported_versions = 1;
+  repeated Feature requested_features = 2;
+  bytes connection_nonce = 3;
+}
+message BootstrapHelloResult {
+  ProtocolVersion selected_version = 1;
+  repeated Feature enabled_features = 2;
+  bytes connection_id = 3;
+  bytes host_identity_fingerprint = 4; // informational; checked against pin
+}
+message PairingEnroll {
+  bytes invitation_id = 1;
+  bytes one_time_secret = 2;      // only after out-of-band TLS host pin check
+  bytes client_certificate_request_der = 3; // signed PKCS#10 CSR, verified before host issues cert
+  string device_label = 4;       // untrusted display string, max 64 bytes
+}
+enum PairingOutcome {
+  PAIRING_OUTCOME_UNSPECIFIED = 0;
+  PAIRING_PENDING_LOCAL_APPROVAL = 1;
+  PAIRING_APPROVED = 2;
+  PAIRING_DENIED = 3;
+  PAIRING_EXPIRED = 4;
+}
+message PairingResult {
+  PairingOutcome outcome = 1;
+  bytes enrolled_client_id = 2;
+  VistaError error = 3;
+  bytes client_certificate_der = 4;      // only after verified CSR + local approval
+  bytes issuing_ca_certificate_der = 5; // public CA certificate, never private key
+  optional uint64 expires_at_unix_ms = 6;
+}
+enum SdpType {
+  SDP_TYPE_UNSPECIFIED = 0;
+  SDP_OFFER = 1;
+  SDP_ANSWER = 2;
+  SDP_ROLLBACK = 3;
+}
+message RtcSignal {
+  bytes authorized_session_id = 1;
+  bytes negotiation_id = 2;
+  oneof payload {
+    RtcDescription sdp = 3;
+    RtcIceCandidate ice_candidate = 4;
+    RtcIceEndOfCandidates ice_end = 5;
+  }
+}
+message RtcDescription { SdpType type = 1; string sdp = 2; }
+message RtcIceCandidate {
+  string candidate = 1;
+  optional string sdp_mid = 2;
+  optional uint32 sdp_mline_index = 3;
+}
+message RtcIceEndOfCandidates { optional string sdp_mid = 1; }
+message SignalingError { VistaError error = 1; bytes negotiation_id = 2; }
+
+// DATA CHANNEL: domain-control — reliable ordered. A new WebRTC PeerConnection
+// always creates a new connection_id/epoch and requires fresh snapshots.
+message ControlEnvelope {
+  ProtocolVersion version = 1;
+  bytes connection_id = 2;       // 16 opaque bytes, authenticated signaling binding
+  bytes request_id = 3;          // 16 random bytes; response echoes it
+  uint64 sequence = 4;           // ordered channel-local monotonic sequence
+  oneof message {
+    ControlHello hello = 10;
+    ControlHelloResult hello_result = 11;
+    CatalogSnapshot catalog_snapshot = 12;
+    CatalogDelta catalog_delta = 13;
+    ResyncRequest resync = 14;
+    CapabilitySnapshot capabilities = 15;
+    CapabilityDelta capability_delta = 16;
+    PermissionUpdate permission_update = 17;
+    CaptureRequest capture_request = 18;
+    CaptureResult capture_result = 19;
+    LeaseRequest lease_request = 20;
+    LeaseResult lease_result = 21;
+    ActionRequest action_request = 22;
+    ActionResult action_result = 23;
+    SessionRequest session_request = 24;
+    SessionResult session_result = 25;
+    SessionUpdate session_update = 26;
+    ClipboardOffer clipboard_offer = 27;
+    ClipboardRequest clipboard_request = 28;
+    ClipboardTransferStatus clipboard_status = 29;
+    MediaControl media_control = 30;
+    VistaError error = 31;
+  }
+}
+message ControlHello { ProtocolVersion selected_version = 1; repeated Feature required_features = 2; }
+message ControlHelloResult {
+  bytes connection_id = 1;
+  uint64 catalog_revision = 2;
+  uint64 capability_revision = 3;
+  uint64 permission_revision = 4;
+}
+message ResyncRequest {
+  enum Domain { DOMAIN_UNSPECIFIED = 0; DOMAIN_CATALOG = 1; DOMAIN_CAPABILITY = 2; DOMAIN_PERMISSIONS = 3; }
+  Domain domain = 1;
+  uint64 last_applied_revision = 2;
+}
+message CatalogEntry {
+  TargetRef target = 1;
+  string display_name = 2;       // only after catalog permission
+  string app_id = 3;             // public app identifier, not executable path
+  bool is_active = 4;
+  Availability stream_availability = 5;
+  StreamSourceKind requested_source_kind = 6;
+}
+message CatalogSnapshot { uint64 revision = 1; repeated CatalogEntry entries = 2; }
+message CatalogDelta {
+  uint64 base_revision = 1;
+  uint64 revision = 2;
+  repeated CatalogEntry upserted = 3;
+  repeated TargetRef removed = 4;
+}
+message CapabilityDescriptor {
+  string id = 1;                 // allowlisted stable namespace
+  uint32 schema_version = 2;
+  TargetRef target = 3;
+  Availability availability = 4;
+  PermissionState authorization = 5;
+  bool enabled = 6;
+  string unavailability_reason_key = 7;
+  string label_key = 8;
+  InputScope input_scope = 9;
+  repeated string parameter_ids = 10; // registered schema IDs only
+}
+message CapabilitySnapshot {
+  uint64 revision = 1;
+  repeated CapabilityDescriptor capabilities = 2;
+}
+message CapabilityDelta {
+  uint64 base_revision = 1;
+  uint64 revision = 2;
+  repeated CapabilityDescriptor upserted = 3;
+  repeated string removed_ids = 4;  // scoped by subscription/session
+}
+message PermissionGrant {
+  bytes id = 1;                  // opaque reference; NOT bearer authorization
+  PermissionKind kind = 2;
+  TargetRef scope = 3;
+  PermissionState state = 4;
+  uint64 epoch = 5;
+  InputScope input_scope = 6;
+  optional uint64 expires_at_unix_ms = 7;
+}
+message PermissionUpdate {
+  uint64 revision = 1;
+  repeated PermissionGrant grants = 2;
+  repeated bytes revoked_ids = 3;
+}
+message CaptureRequest {
+  TargetRef requested_target = 1;   // optional for picker-only flow
+  StreamSourceKind requested_kind = 2;
+  bool require_verified_catalog_binding = 3;
+}
+message CaptureSelection {
+  TargetRef stream_target = 1;      // new portal-selection target if unbound
+  bytes capture_grant_id = 2;
+  uint64 grant_epoch = 3;
+  StreamSourceKind actual_kind = 4;
+  optional TargetRef verified_catalog_target = 5;  // absent if unproven
+}
+message CaptureResult {
+  oneof result {
+    CaptureSelection approved = 1;
+    VistaError error = 2;
+  }
+}
+enum LeaseOperation { LEASE_OP_UNSPECIFIED = 0; LEASE_ACQUIRE = 1; LEASE_RENEW = 2; LEASE_RELEASE = 3; }
+message LeaseRequest {
+  LeaseOperation operation = 1;
+  TargetRef target = 2;
+  bytes existing_lease_id = 3;
+  bytes input_grant_id = 4;
+  uint64 grant_epoch = 5;
+}
+message LeaseResult {
+  oneof result {
+    LeaseDescriptor active = 1;
+    VistaError error = 2;
+  }
+}
+message LeaseDescriptor {
+  bytes lease_id = 1;
+  TargetRef target = 2;
+  uint64 grant_epoch = 3;
+  InputScope scope = 4;
+  uint64 expires_at_unix_ms = 5;
+}
+message ActionValue {
+  string name = 1;               // registered parameter name
+  oneof value {
+    bool boolean = 2;
+    sint64 integer = 3;
+    string text = 4;
+    double number = 5;
+    string enum_value = 6;
+  }
+}
+message ActionRequest {
+  TargetRef target = 1;
+  string action_id = 2;
+  uint32 schema_version = 3;
+  uint64 capability_revision = 4;
+  bytes lease_id = 5;
+  uint64 grant_epoch = 6;
+  repeated ActionValue arguments = 7;
+}
+message ActionResult {
+  oneof result {
+    ActionSuccess success = 1;
+    VistaError error = 2;
+  }
+}
+message ActionSuccess { optional uint64 resulting_capability_revision = 1; }
+
+// DATA CHANNEL: input-motion may be separate unordered/partially reliable,
+// but input edge transitions (down/up/cancel) MUST be reliable ordered,
+// authenticated, scoped and reconciled. Do not replay stale motion after reconnect.
+message InputEnvelope {
+  bytes connection_id = 1;
+  bytes lease_id = 2;
+  TargetRef target = 3;
+  uint64 grant_epoch = 4;
+  uint64 geometry_epoch = 5;
+  uint64 event_sequence = 6;
+  oneof input {
+    PointerMotion motion = 10;
+    PointerButton button = 11;
+    PointerScroll scroll = 12;
+    PhysicalKey physical_key = 13;
+    CommittedText committed_text = 14;
+    TouchContact touch = 15;
+    CancelInputs cancel = 16;
+  }
+}
+message PointerMotion {
+  bool absolute = 1;
+  double x = 2;
+  double y = 3;                  // absolute: normalized [0,1]; relative: logical deltas
+}
+message PointerButton { uint32 button = 1; bool pressed = 2; }
+message PointerScroll {
+  double delta_x = 1;
+  double delta_y = 2;
+  enum Unit { UNIT_UNSPECIFIED = 0; UNIT_PIXELS = 1; UNIT_LINES = 2; }
+  Unit unit = 3;
+  enum Phase { PHASE_UNSPECIFIED = 0; PHASE_BEGIN = 1; PHASE_UPDATE = 2; PHASE_END = 3; PHASE_CANCEL = 4; }
+  Phase phase = 4;
+}
+message PhysicalKey { uint32 usb_hid_usage = 1; bool pressed = 2; }
+message CommittedText { string utf8 = 1; }
+message TouchContact {
+  uint32 contact_id = 1;
+  double x = 2;
+  double y = 3;
+  enum Phase { PHASE_UNSPECIFIED = 0; PHASE_BEGIN = 1; PHASE_MOVE = 2; PHASE_END = 3; PHASE_CANCEL = 4; }
+  Phase phase = 4;
+}
+message CancelInputs { bool release_all = 1; }
+
+enum SessionOperation { SESSION_OP_UNSPECIFIED = 0; SESSION_OPEN = 1; SESSION_LAUNCH_APP = 2; SESSION_ATTACH = 3; SESSION_STOP = 4; }
+message SessionRequest {
+  SessionOperation operation = 1;
+  TargetRef target = 2;
+  string registered_app_id = 3;  // no client-supplied executable/arguments
+}
+message SessionResult {
+  oneof result { SessionDescriptor active = 1; VistaError error = 2; }
+}
+message SessionDescriptor {
+  bytes session_id = 1;
+  TargetRef stream_target = 2;
+  bool managed = 3;
+  InputScope input_scope = 4;
+}
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  SESSION_STARTING = 1;
+  SESSION_ACTIVE = 2;
+  SESSION_SUSPENDED = 3;
+  SESSION_STOPPING = 4;
+  SESSION_CLOSED = 5;
+  SESSION_FAILED = 6;
+}
+message SessionUpdate {
+  bytes session_id = 1;
+  SessionState state = 2;
+  uint64 generation = 3;
+  VistaError error = 4;
+}
+message ClipboardOffer {
+  bytes transfer_id = 1;
+  bytes session_id = 2;
+  bool host_to_client = 3;
+  repeated string mime_types = 4;
+  uint64 grant_epoch = 5;
+  uint64 estimated_max_bytes = 6;
+}
+message ClipboardRequest {
+  bytes transfer_id = 1;
+  string mime_type = 2;
+  uint64 grant_epoch = 3;
+}
+message ClipboardTransferStatus {
+  bytes transfer_id = 1;
+  enum State { STATE_UNSPECIFIED = 0; STATE_STARTED = 1; STATE_COMPLETE = 2; STATE_CANCELLED = 3; STATE_FAILED = 4; }
+  State state = 2;
+  VistaError error = 3;
+}
+// DATA CHANNEL: clipboard-data — separately authorized bounded chunks.
+// Payload is NEVER carried in logs or a capability snapshot.
+message ClipboardChunk {
+  bytes connection_id = 1;
+  bytes transfer_id = 2;
+  uint64 offset = 3;
+  bytes data = 4;
+  bool final_chunk = 5;
+}
+message MediaControl {
+  bytes session_id = 1;
+  oneof command {
+    RequestKeyframe request_keyframe = 2;
+    SetAudioMuted set_audio_muted = 3;
+    SetQualityHint set_quality_hint = 4;
+  }
+}
+message RequestKeyframe { uint64 expected_stream_generation = 1; }
+message SetAudioMuted { bool muted = 1; }
+message SetQualityHint { optional uint32 max_bitrate_kbps = 1; optional uint32 max_framerate = 2; }

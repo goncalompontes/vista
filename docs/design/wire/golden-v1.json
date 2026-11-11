@@ -1,0 +1,139 @@
+{
+  "$schema_note": "Draft manually derived protobuf wire vectors; independent protoc/generator verification remains a required worker acceptance gate. These are wire-shape fixtures, not full authorization-valid requests.",
+  "package": "vista.v1",
+  "vectors": [
+    {
+      "id": "v1-protocol-major-only",
+      "type": "vista.v1.ProtocolVersion",
+      "value": {
+        "major": 1,
+        "minor": 0
+      },
+      "hex": "0801",
+      "notes": "proto3 zero-valued minor is omitted"
+    },
+    {
+      "id": "v1-cancel-all",
+      "type": "vista.v1.CancelInputs",
+      "value": {
+        "release_all": true
+      },
+      "hex": "0801"
+    },
+    {
+      "id": "v1-keydown-usage-4",
+      "type": "vista.v1.PhysicalKey",
+      "value": {
+        "usb_hid_usage": 4,
+        "pressed": true
+      },
+      "hex": "08041001"
+    },
+    {
+      "id": "v1-button-pressed",
+      "type": "vista.v1.PointerButton",
+      "value": {
+        "button": 1,
+        "pressed": true
+      },
+      "hex": "08011001"
+    },
+    {
+      "id": "v1-stale-target-error",
+      "type": "vista.v1.VistaError",
+      "value": {
+        "code": "ERROR_TARGET_STALE",
+        "message_key": "target.stale"
+      },
+      "hex": "0809120c7461726765742e7374616c65"
+    },
+    {
+      "id": "v1-lease-acquire-wire-only",
+      "type": "vista.v1.LeaseRequest",
+      "value": {
+        "operation": "LEASE_ACQUIRE"
+      },
+      "hex": "0801",
+      "notes": "Valid protobuf bytes; domain validation MUST reject missing TargetRef/grant"
+    },
+    {
+      "id": "v1-window-source-request-wire-only",
+      "type": "vista.v1.CaptureRequest",
+      "value": {
+        "requested_kind": "STREAM_SOURCE_WINDOW",
+        "require_verified_catalog_binding": true
+      },
+      "hex": "10011801",
+      "notes": "A host may reject this semantically if the requested catalog target is mandatory for verified binding"
+    },
+    {
+      "id": "v1-target-id-16-bytes",
+      "type": "vista.v1.TargetRef",
+      "value": {
+        "id_hex": "000102030405060708090a0b0c0d0e0f",
+        "generation": 7,
+        "kind": "TARGET_CATALOG_WINDOW"
+      },
+      "hex": "0a10000102030405060708090a0b0c0d0e0f18072001"
+    },
+    {
+      "id": "v1-revoked-permission",
+      "type": "vista.v1.PermissionGrant",
+      "value": {
+        "state": "PERMISSION_REVOKED",
+        "epoch": 2
+      },
+      "hex": "20062802",
+      "notes": "Wire-only fixture missing grant identity, scope and permission kind; semantic validation must reject it; PERMISSION_REVOKED numeric value is 6"
+    },
+    {
+      "id": "v1-unknown-optional-field",
+      "type": "vista.v1.ProtocolVersion",
+      "value": {
+        "major": 1,
+        "unknown_wire_tag_99_varint": 2
+      },
+      "hex": "0801980602",
+      "notes": "Unknown field 99 varint key = (99 << 3) | 0 = 792 = 0x98 0x06; test parser acceptance and relay behavior separately"
+    }
+  ],
+  "negative_cases": [
+    {
+      "id": "truncated-varint",
+      "hex": "80",
+      "expected": "decode_error"
+    },
+    {
+      "id": "invalid-wire-type",
+      "hex": "0f",
+      "expected": "decode_error"
+    },
+    {
+      "id": "missing-required-domain-id",
+      "derived_from": "v1-lease-acquire-wire-only",
+      "expected": "semantic_error"
+    },
+    {
+      "id": "missing-capture-grant",
+      "derived_from": "v1-window-source-request-wire-only",
+      "expected": "semantic_or_consent_flow"
+    },
+    {
+      "id": "unknown-enum-action",
+      "expected": "safe_reject_no_side_effect"
+    },
+    {
+      "id": "stale-geometry-epoch",
+      "expected": "ERROR_TARGET_STALE_or_scope_specific_rejection"
+    },
+    {
+      "id": "portal-monitor-for-window-request",
+      "expected": "ERROR_SCOPE_MISMATCH_close_source"
+    },
+    {
+      "id": "grant-revoked-during-capture",
+      "expected": "ERROR_PERMISSION_REVOKED_stop_media_and_input"
+    }
+  ],
+  "verification_instructions": "Parse and reserialize in generated Rust/Swift/Android implementations, check parsed fields and unknown enum policies. Exact byte identity requires deterministic serialization and canonical field order; do not compare bytes blindly for map fields."
+}

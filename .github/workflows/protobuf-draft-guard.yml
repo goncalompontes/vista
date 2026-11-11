@@ -1,0 +1,27 @@
+name: Protobuf draft schema guard
+on:
+  pull_request:
+    paths:
+      - 'docs/design/wire/**'
+      - 'docs/design/canonical-protocol-spec.md'
+      - 'docs/adr/0005-canonical-schema-ownership.md'
+      - '.github/workflows/protobuf-draft-guard.yml'
+  push:
+    paths:
+      - 'docs/design/wire/**'
+      - 'docs/design/canonical-protocol-spec.md'
+      - 'docs/adr/0005-canonical-schema-ownership.md'
+      - '.github/workflows/protobuf-draft-guard.yml'
+permissions:
+  contents: read
+jobs:
+  compile-draft:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+      - name: Compile draft and decode golden vectors
+        run: python3 docs/design/wire/verify-candidate.py "$(command -v protoc)"
