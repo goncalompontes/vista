@@ -4,7 +4,7 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-vphone="${VPHONE_HOME:-$HOME/lsm-workspace/vphone-linux}"
+vphone="${VPHONE_HOME:-$HOME/projects/vphone-linux}"
 cid="${VPHONE_CID:-3}"
 bundle_id="dev.vista.client"
 ipa="$here/xtool/Vista.ipa"
@@ -17,7 +17,7 @@ usage() {
   echo "  run       Build, install and launch Vista"
   echo "  logs      Read the last 30 seconds of Vista logs"
   echo "  crashes   List Vista crash reports"
-  echo "Environment: VPHONE_HOME (default $HOME/lsm-workspace/vphone-linux), VPHONE_CID (default 3)"
+  echo "Environment: VPHONE_HOME (default $HOME/projects/vphone-linux), VPHONE_CID (default 3)"
 }
 
 require_vphone() {

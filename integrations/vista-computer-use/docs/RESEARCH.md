@@ -8,7 +8,7 @@ production-ready.
 
 ### vphone-linux host tools
 
-Inspected in `~/lsm-workspace/vphone-linux`:
+Inspected in `~/projects/vphone-linux` (moved here after the initial inspection):
 
 | Tool | Reused for | Notes |
 | --- | --- | --- |

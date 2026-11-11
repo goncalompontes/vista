@@ -120,7 +120,7 @@ class Config:
         workspace = _workspace(env, cwd)
 
         vphone_home = _env_path(env, "VPHONE_HOME") or (
-            Path.home() / "lsm-workspace" / "vphone-linux"
+            Path.home() / "projects" / "vphone-linux"
         )
         vphone_devices = _env_path(env, "VPHONE_DEVICES") or (
             Path.home() / "vphone-setup-work" / "devices"

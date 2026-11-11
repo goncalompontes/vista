@@ -40,7 +40,7 @@ image content.
 
 - Linux with `python3` 3.10+ (stdlib only; no `pip install` required).
 - A vphone-linux checkout with a running VM and `vphoned` on vsock, default
-  `~/lsm-workspace/vphone-linux` and CID 3.
+  `~/projects/vphone-linux` and CID 3.
 - `socat` and the vphone tools' normal dependencies.
 - For host tools: a built `vista-host` binary. From the Vista workspace:
   `cargo build --bin vista-host` (the binary is normally at
@@ -71,14 +71,14 @@ paths; the example is in [codex.config.toml.example](codex.config.toml.example))
 
 ```toml
 [mcp_servers.vista_computer_use]
-command = "/home/pontes/lsm-workspace/vista/integrations/vista-computer-use/bin/vista-computer-use-mcp"
+command = "/home/pontes/projects/vista/integrations/vista-computer-use/bin/vista-computer-use-mcp"
 args = []
 startup_timeout_sec = 20
 tool_timeout_sec = 900
 
 [mcp_servers.vista_computer_use.env]
-VISTA_HOME = "/home/pontes/lsm-workspace/vista"
-VPHONE_HOME = "/home/pontes/lsm-workspace/vphone-linux"
+VISTA_HOME = "/home/pontes/projects/vista"
+VPHONE_HOME = "/home/pontes/projects/vphone-linux"
 VPHONE_CID = "3"
 ```
 
@@ -99,12 +99,12 @@ Add this to `opencode.json` / `opencode.jsonc` (see
     "vista_computer_use": {
       "type": "local",
       "command": [
-        "/home/pontes/lsm-workspace/vista/integrations/vista-computer-use/bin/vista-computer-use-mcp"
+        "/home/pontes/projects/vista/integrations/vista-computer-use/bin/vista-computer-use-mcp"
       ],
       "enabled": true,
       "environment": {
-        "VISTA_HOME": "/home/pontes/lsm-workspace/vista",
-        "VPHONE_HOME": "/home/pontes/lsm-workspace/vphone-linux",
+        "VISTA_HOME": "/home/pontes/projects/vista",
+        "VPHONE_HOME": "/home/pontes/projects/vphone-linux",
         "VPHONE_CID": "3"
       }
     }
@@ -125,7 +125,7 @@ in sync.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `VISTA_HOME` | derived from the package path | Vista workspace root; used for the host binary, client IPA, screenshots and allowed write roots. |
-| `VPHONE_HOME` | `~/lsm-workspace/vphone-linux` | vphone-linux checkout. |
+| `VPHONE_HOME` | `~/projects/vphone-linux` | vphone-linux checkout. |
 | `VPHONE_DEVICES` | `~/vphone-setup-work/devices` | Directory containing VM bundles (the same default as `setup/start-vm.sh`). |
 | `VPHONE_CID` | auto / 3 | vsock CID. Auto uses the selected VM's `cid` file, then 3. The server resolves the active CID at startup; after starting a VM with a different CID, set `VPHONE_CID` and restart the MCP server. |
 | `VPHONE_VM` | auto | VM name to use when more than one VM exists. |

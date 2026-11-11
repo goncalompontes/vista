@@ -51,7 +51,7 @@ on non-Apple hardware.
 
 Setup prerequisites:
 
-1. Install vphone-linux in a separate checkout (default: `~/lsm-workspace/vphone-linux`).
+1. Install vphone-linux in a separate checkout (default: `~/projects/vphone-linux`).
    Its own `setup/setup.sh` installs system dependencies and builds QEMU;
    `setup/create-vm.sh` builds a virtual iPhone from Apple firmware. Consult its
    setup instructions and review any root/system changes before proceeding.
@@ -65,7 +65,7 @@ Setup prerequisites:
    developer downloads using your Apple account; run `xtool sdk install` on
    the downloaded archive and `xtool sdk status`. The iOS SDK is not bundled
    with Vista or vphone-linux.
-4. Start the VM with `~/lsm-workspace/vphone-linux/setup/start-vm.sh`.
+4. Start the VM with `~/projects/vphone-linux/setup/start-vm.sh`.
    Confirm its vphoned control interface responds before installing applications.
 
 Both XcodeGen (`client/ios/project.yml`) and xtool
@@ -101,7 +101,8 @@ as a SHA-256-verified AppImage, extracted under
 `~/.local/opt/xtool-1.24.0/squashfs-root/` and exposed at
 `~/.local/bin/xtool`. This avoids FUSE, which was unavailable inside the
 DSH sandbox. The vphone-linux source and its pinned submodules were
-checked out at `~/lsm-workspace/vphone-linux`; no VM has booted yet.
+checked out at `~/lsm-workspace/vphone-linux` at the time; it has since moved to
+`~/projects/vphone-linux`. No VM had booted at that checkpoint.
 
 Swiftly and **Swift 6.4.1** are installed. The Arch `libxml2-legacy`
 package (`2.13.9-2`) was downloaded and extracted *without system changes*

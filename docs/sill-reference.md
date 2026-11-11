@@ -2,7 +2,7 @@
 
 Upstream: https://github.com/Saffsanity/sill (reference snapshot `41e8cb8`, inspected 2026-11-07).
 License: [Apache License 2.0](https://github.com/Saffsanity/sill/blob/main/LICENSE).
-Local read-only reference checkout: `/home/pontes/lsm-workspace/sill-upstream-reference` (developer convenience, **not** a Vista build dependency).
+Local read-only reference checkout: `/home/pontes/projects/sill-upstream-reference` (developer convenience, **not** a Vista build dependency).
 
 ## Direction
 

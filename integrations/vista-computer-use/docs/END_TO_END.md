@@ -24,7 +24,7 @@ pixels. The service is single-client and has no TLS.
 - The Vista host binary is current:
 
 ```sh
-cd /home/pontes/lsm-workspace/vista
+cd /home/pontes/projects/vista
 cargo build --bin vista-host
 ```
 
@@ -35,7 +35,7 @@ cargo build --bin vista-host
   slow Xcode/xtool step):
 
 ```sh
-cd /home/pontes/lsm-workspace/vista/client/ios
+cd /home/pontes/projects/vista/client/ios
 ./vphone.sh build        # writes client/ios/xtool/Vista.ipa
 ./vphone.sh check        # xtool + guest vphoned health
 ```
@@ -46,7 +46,7 @@ Use the direct Codex or OpenCode config in the package README. Verify the
 server's read-only view first:
 
 ```sh
-cd /home/pontes/lsm-workspace/vista/integrations/vista-computer-use
+cd /home/pontes/projects/vista/integrations/vista-computer-use
 ./bin/vista-computer-use-mcp --check
 ```
 
