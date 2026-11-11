@@ -46,6 +46,16 @@ class MediaDecoder {
         }
     }
 
+    /** Flush any previous stream so the next IDR re-sends codec configuration. */
+    fun resetForNewStream() {
+        synchronized(lock) {
+            codec?.flush()
+            waitingForKeyframe = true
+            needsCodecConfig = true
+            lastPtsUs = -1L
+        }
+    }
+
     fun submit(record: MediaRecord) {
         synchronized(lock) {
             val active = codec ?: return

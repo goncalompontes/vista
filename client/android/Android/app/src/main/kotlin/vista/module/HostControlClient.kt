@@ -41,6 +41,9 @@ class HostControlClient {
     @Volatile private var sessionId = ""
     @Volatile private var geometryEpoch = 0L
     @Volatile private var inputAllowed = false
+    @Volatile private var manualClose = false
+    @Volatile private var connectionGeneration = 0
+    @Volatile private var lastTarget: JSONObject? = null
     private var hostAddress = ""
     private var secret = ByteArray(0)
     private var capabilityConnectionEpoch = ""
@@ -61,49 +64,68 @@ class HostControlClient {
 
     fun connect(host: String, port: Int, secretHex: String) {
         close()
+        manualClose = false
+        val generation = ++connectionGeneration
         executor.execute {
-            try {
-                publish("Connecting…")
-                secret = VistaWire.hexToBytes(secretHex)
-                require(secret.size == VistaWire.PAIRING_SECRET_BYTES) {
-                    "Pairing secret must be 64 hex characters"
+            val parsedSecret = runCatching { VistaWire.hexToBytes(secretHex) }.getOrElse {
+                publish("Pairing secret must be 64 hex characters")
+                return@execute
+            }
+            secret = parsedSecret
+            hostAddress = host
+            var delayMs = 500L
+            var everConnected = false
+            while (!manualClose && generation == connectionGeneration) {
+                try {
+                    publish(if (everConnected) "Reconnecting…" else "Connecting…")
+                    runSession(host, port)
+                } catch (error: Throwable) {
+                    Log.e("VistaWire", "control connection failed", error)
+                    if (manualClose || generation != connectionGeneration) break
+                    publish("Connection lost: ${error.message ?: error.javaClass.simpleName}")
                 }
-                hostAddress = host
-                val sock = Socket()
-                sock.connect(InetSocketAddress(host, port), 12_000)
-                socket = sock
-                val control = VistaSession(
-                    BufferedInputStream(sock.getInputStream()),
-                    BufferedOutputStream(sock.getOutputStream()),
-                    secret,
-                    "vista-android",
-                )
-                session = control
-                control.trace = { Log.d("VistaWire", "control: $it") }
-                control.handshake(wantInput = true, encryptSessionOpen = true)
-                sessionId = control.sessionId
-                sessionActive = true
-                inputAllowed = control.policyInput
-                publish("Connected to $host" + if (inputAllowed) " (input enabled)" else "")
-                publishConnected(true)
-                select(JSONObject().put("kind", "desktop"))
-                while (sessionActive) {
-                    handle(control.readSecure())
-                }
-            } catch (error: Throwable) {
-                Log.e("VistaWire", "control connection failed", error)
-                if (sessionActive) {
-                    publish("Connection failed: ${error.message ?: error.javaClass.simpleName}")
-                }
-            } finally {
+                stopMedia()
                 sessionActive = false
                 session = null
-                publishConnected(false)
+                inputAllowed = false
                 closeSocket(socket)
                 socket = null
-                publishCatalog(emptyList())
-                publishCapabilities(emptyList())
+                if (manualClose || generation != connectionGeneration) break
+                everConnected = true
+                publishConnected(false)
+                publish("Reconnecting in ${delayMs / 1000}s…")
+                try {
+                    Thread.sleep(delayMs)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                delayMs = minOf(delayMs * 2, 5_000L)
             }
+        }
+    }
+
+    /** One control connection; returns when the session ends or the user closes it. */
+    private fun runSession(host: String, port: Int) {
+        val sock = Socket()
+        sock.connect(InetSocketAddress(host, port), 12_000)
+        socket = sock
+        val control = VistaSession(
+            BufferedInputStream(sock.getInputStream()),
+            BufferedOutputStream(sock.getOutputStream()),
+            secret,
+            "vista-android",
+        )
+        session = control
+        control.trace = { Log.d("VistaWire", "control: $it") }
+        control.handshake(wantInput = true, encryptSessionOpen = true)
+        sessionId = control.sessionId
+        sessionActive = true
+        inputAllowed = control.policyInput
+        publish("Connected to $host" + if (inputAllowed) " (input enabled)" else "")
+        publishConnected(true)
+        sendSelection(control)
+        while (sessionActive && !manualClose) {
+            handle(control.readSecure())
         }
     }
 
@@ -222,10 +244,13 @@ class HostControlClient {
     }
 
     fun close() {
+        manualClose = true
+        connectionGeneration++
         sessionActive = false
         mediaActive = false
         session = null
         mediaSession = null
+        inputAllowed = false
         closeSocket(socket)
         closeSocket(mediaSocket)
         socket = null
@@ -237,20 +262,27 @@ class HostControlClient {
     }
 
     private fun select(target: JSONObject) {
+        lastTarget = target
         commandExecutor.execute {
             if (!sessionActive) return@execute
+            val control = session ?: return@execute
             try {
-                session?.sendSecure(
-                    JSONObject()
-                        .put("type", "stream.select")
-                        .put("v", 1)
-                        .put("session_id", sessionId)
-                        .put("target", target),
-                )
+                sendSelection(control)
             } catch (error: Throwable) {
                 publish("Stream selection failed: ${error.message ?: "transport error"}")
             }
         }
+    }
+
+    private fun sendSelection(control: VistaSession) {
+        val target = lastTarget ?: JSONObject().put("kind", "desktop")
+        control.sendSecure(
+            JSONObject()
+                .put("type", "stream.select")
+                .put("v", 1)
+                .put("session_id", control.sessionId)
+                .put("target", target),
+        )
     }
 
     private fun handle(message: JSONObject) {
@@ -326,6 +358,7 @@ class HostControlClient {
                 media.trace = { Log.d("VistaWire", "media: $it") }
                 media.handshake(wantInput = false, encryptSessionOpen = false)
                 mediaActive = true
+                decoder.resetForNewStream()
                 publishMediaActive(true)
                 publish("Receiving video…")
                 media.sendKeyframeRequest()

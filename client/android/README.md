@@ -121,7 +121,9 @@ recorded separately.
   click are not wired; the client sends absolute pointer position, the primary
   button, hardware key presses (letters, digits, arrows, modifiers and common
   editing keys) and committed text. Only Shift has been exercised end to end.
-- No retry/reconnect policy beyond reporting the failure, and no discovery.
+- Reconnect retries the control and media connections with a short exponential
+  backoff after a drop; there is still no discovery.
+- A reconnect starts a new host session (new pairing), not a resumed one.
 - Media decode is verified only on an x86_64 emulator; hardware-decoder
   behaviour on a phone is untested.
 - Audio and clipboard are not implemented.

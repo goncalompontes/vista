@@ -105,6 +105,26 @@ effective rate was about 8.7 fps (654 frames over ~75 s), consistent with the
 `grim` capture loop plus software `x264enc` and emulator decode, not with a
 stall. This is not a latency or throughput benchmark.
 
+### Fourth run — host restart and automatic reconnect
+
+While the client was streaming, the host process was killed and restarted with
+the same pairing secret (a new `serve` process, not a resumed session). No
+input was sent to the client.
+
+```text
+13:21:32 E VistaWire: control connection failed: ECONNREFUSED
+13:21:34 E VistaWire: control connection failed: ECONNREFUSED
+13:21:38 E VistaWire: control connection failed: ECONNREFUSED
+13:21:43 D VistaWire: control: send plain client_hello
+13:21:44 D VistaWire: control: send secure stream.select
+13:21:44 D VistaWire: media: send plain client_hello
+13:21:44 D VistaWire: control: recv secure stream.started
+```
+
+The restarted host logged `client connected`, reopened the media endpoint, and
+the emulator showed `Live · 120 frames` with the 1920×1080 stream again. The
+client retried with a short exponential backoff while the host was down.
+
 ## What this establishes
 
 - The Kotlin control client pairs with the real host, opens an encrypted
@@ -123,7 +143,10 @@ stall. This is not a latency or throughput benchmark.
   by the host as part of the same eight accepted events.
 - Sustained playback: the client stayed connected for ~75 s and the host
   delivered 654 authenticated records (6.7 MB) with zero drops and no errors.
-- The Android Gradle build and 16 JVM unit tests pass, including the shared
+- Automatic reconnect: after the host was killed and restarted, the client
+  re-paired, reopened the media connection and resumed video without user
+  action. This replaces the previous `--once` host after every disconnect.
+- The Android Gradle build and 14 JVM unit tests pass, including the shared
   Rust/Swift pairing vector, media parsing, Annex-B, key mapping and a scripted
   control + media handshake.
 
@@ -142,4 +165,6 @@ stall. This is not a latency or throughput benchmark.
 - The host path still captures the whole output and fullscreens a selected
   window; it is single-client and has no TLS. Treat the pairing secret and the
   LAN as trusted.
-- No reconnect, backpressure, congestion control, discovery or audio/clipboard.
+- The reconnect test restarted the host process; it does not prove seamless
+  session resumption, media buffering across a network partition, backpressure,
+  congestion control, discovery or audio/clipboard.

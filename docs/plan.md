@@ -209,8 +209,8 @@ client cannot see or affect the host desktop.
 2. Finish Android interaction: drag/scroll, a typed text commit run, then a
    physical-device run of the existing media path. The Android client is the
    MVP verification platform while iOS stays unverified.
-3. Add incremental catalog refresh and reconnect/backpressure handling on both
-   clients.
+3. Add backpressure/throughput work and discovery; the Android client already
+   retries control and media connections after a drop.
 4. Continue M3 audio/clipboard, then M4 independent sessions and M5
    packaging/reliability.
 
