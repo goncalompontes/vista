@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Read the support policy first
+    url: https://github.com/goncalompontes/vista/blob/main/SUPPORT.md
+    about: What is supported, what is not, and what to include in a report.
+  - name: Report a security vulnerability
+    url: https://github.com/goncalompontes/vista/security/advisories/new
+    about: Private reporting only. Never post vulnerability details in a public issue.
+  - name: Contributing guide
+    url: https://github.com/goncalompontes/vista/blob/main/CONTRIBUTING.md
+    about: Setup, tests, commit conventions and the DCO sign-off.

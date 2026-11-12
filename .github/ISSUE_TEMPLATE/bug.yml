@@ -1,0 +1,87 @@
+name: Bug report
+description: Something does not work the way the documentation says it does.
+title: "[Bug] "
+labels: ["bug", "needs reproduction"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Vista's docs make precise claims, so a report that
+        shows the exact command and output is worth ten that describe a symptom.
+
+        If this is a security issue, stop and use the private reporting link
+        instead: https://github.com/goncalompontes/vista/security/advisories/new
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or version
+      description: Output of `git rev-parse --short HEAD`, or the tag you built.
+      placeholder: "44e82db"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Rust host (capture, encode, transport, input)
+        - Control protocol / pairing
+        - Media transport
+        - iOS / iPadOS client
+        - Android client
+        - MCP integration / computer-use
+        - Documentation
+        - Build or CI
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command and output
+      description: Paste the command line and its full output, including the exit code.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and why
+      description: Point to the doc, issue or test that led you to expect it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Compositor and version, distro, GPU and driver, Rust version, client device or emulator.
+      placeholder: "Niri 26.04, Fedora 42, RTX 4070 / 580.x, Rust 1.88, Android 36 x86_64 emulator"
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Host environment report
+      description: For host issues, paste the output of `cd host && cargo run -- doctor`.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you already tried
+    validations:
+      required: false
