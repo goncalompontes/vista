@@ -1,6 +1,10 @@
 # ADR 0004 — Vista project license and Niri IPC dependency policy
 
-Status: **request for maintainer decision (2026-11-09)**. This is a recommendation and dependency policy, **not** an application of legal terms to the repository. Do not create a root `LICENSE` or release binaries with unreviewed dependency combinations before approval in #73. Not legal advice.
+Status: **accepted (2026-11-12)**. The maintainer chose Apache-2.0 for Vista's
+original source and the protocol-only Niri integration described below. The root
+[`LICENSE`](../../LICENSE), [`NOTICE`](../../NOTICE) and
+[`THIRD_PARTY_NOTICES.md`](../../THIRD_PARTY_NOTICES.md) are in place and the
+README states the license. Not legal advice.
 
 ## Context
 
@@ -50,7 +54,14 @@ Before applying Apache-2.0:
 
 ## Closure criteria for issue #73
 
-Maintainer explicitly chooses a source/release license and approves the Niri library vs protocol-only strategy; license and copyright inventory is completed; root LICENSE/SPDX/NOTICE written appropriately; generated dependency report and source provenance documented; CI checks flag drift. Until then, keep #73 open and do not mark any architectural decision that incorporates legal rights as final.
+Maintainer choice: **Apache-2.0**, with the Niri protocol-only integration. Done
+on 2026-11-12: root `LICENSE` with unmodified Apache-2.0 text, `NOTICE`,
+`THIRD_PARTY_NOTICES.md` covering Rust, Swift, Android and system GStreamer
+dependencies, and a README license section.
+
+Still open: a per-file provenance inventory for any source adapted from Sill, and
+an automated dependency-license check in CI. Until those land, keep #73 open: the
+license decision is final, the mechanical enforcement is not.
 
 ## Sources
 

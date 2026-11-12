@@ -2,6 +2,8 @@
 
 Status: **architectural review performed; technical approval recommended with conditions**. Proposed ADR 0002 in PR #67 and the stacked design package PR #76 remain unmerged. The review does not certify security, generated schema, third-party licensing or real desktop compatibility.
 
+Historical record: this review is a snapshot of 2026-11-09. The licensing gate it names was decided on 2026-11-12 in [ADR 0004](../adr/0004-license-and-niri-ipc-policy.md) (Apache-2.0, protocol-only Niri adapter); issue #73 remains open for provenance inventory and CI enforcement. The findings below are kept as written.
+
 ## Scope and review approach
 
 Reviewed `docs/architecture-target.md`, `docs/adr/0002-host-platform-neutral-core.md`, `docs/design/{provider-interface-contracts,linux-desktop-compatibility,canonical-protocol-spec,security-threat-model,adapter-library-evaluation,client-experience-implementation-spec}.md`, the proto candidate, issue backlog and public upstream docs for Niri IPC, TLS/mTLS/Apple/Android identities, Protobuf and Apache/GPL compatibility. Compared consumer/provider boundaries against current `host/src/{catalog,capability,capture,lifecycle,live,protocol,transport}.rs` filenames and dependency manifest, **without compiling or running Vista**.

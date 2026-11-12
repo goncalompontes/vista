@@ -1,0 +1,35 @@
+name: Usage question
+description: Ask how to do something, or whether a setup is supported.
+title: "[Question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [SUPPORT.md](https://github.com/goncalompontes/vista/blob/main/SUPPORT.md)
+        first: it lists what is supported and what is not. Questions about
+        unsupported setups may be closed with a link rather than an answer.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: What are you trying to do?
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Compositor, distro, GPU, client, and the commit you built.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you tried
+      description: Commands and their output.
+      render: shell
+    validations:
+      required: false

@@ -1,0 +1,12 @@
+Vista
+Copyright 2026 The Vista Authors
+
+This product includes software developed as part of the Vista project
+(https://github.com/goncalompontes/vista).
+
+Vista's client interaction design is informed by Sill
+(https://github.com/Saffsanity/sill), which is licensed under the Apache
+License, Version 2.0. Any source adapted from Sill keeps its original
+copyright notice and license in the file. Sill does not endorse Vista.
+
+Third-party dependency notices are listed in THIRD_PARTY_NOTICES.md.

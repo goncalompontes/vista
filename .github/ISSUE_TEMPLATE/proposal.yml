@@ -1,0 +1,73 @@
+name: Feature or design proposal
+description: Propose a change in behaviour, scope or architecture.
+title: "[Proposal] "
+labels: ["enhancement", "needs design"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Vista is pre-1.0 and deliberately sequenced: see
+        [docs/plan.md](https://github.com/goncalompontes/vista/blob/main/docs/plan.md)
+        before proposing something outside the current phase. Proposals that jump
+        the queue are usually parked, not rejected.
+
+        Architecture changes need an ADR. This issue is the discussion; the ADR
+        is the record.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can a user not do today, or what goes wrong? Avoid naming a solution yet.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What should happen instead? Name the component and the observable behaviour.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including doing nothing, and any existing project that solves it.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface changes
+      multiple: true
+      options:
+        - Host CLI
+        - Wire protocol v1
+        - Host internals
+        - iOS client
+        - Android client
+        - Documentation
+        - Build / CI
+    validations:
+      required: true
+
+  - type: textarea
+    id: cost
+    attributes:
+      label: Cost and risk
+      description: New dependencies, platform constraints, security impact, and what could break for existing users.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: This is not a security vulnerability (those go through private reporting)
+          required: true
+        - label: I read docs/plan.md and this is not already scheduled there
+          required: true

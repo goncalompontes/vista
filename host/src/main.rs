@@ -28,7 +28,7 @@ fn usage() {
     eprintln!("       vista-host bridge-test [--json]");
     eprintln!("       vista-host sync-test [--json]");
     eprintln!(
-        "       vista-host media-stream --serve [--listen ADDR] [--frames N] | --connect ADDR --key-hex HEX --session-id ID [--json]"
+        "       vista-host media-stream --serve [--listen ADDR] [--frames N] | --connect ADDR --secret-hex HEX [--json]"
     );
     eprintln!("       vista-host keyframe-control-test [--json]");
     eprintln!(
@@ -44,9 +44,6 @@ fn usage() {
     eprintln!(
         "       vista-host protocol-serve --confirm [--listen ADDR] [--secret-hex HEX] [--window ID --allow-window-actions|--allow-desktop-actions|--allow-clipboard|--allow-input] [--fake-actions] [--capability-revision N] [--catalog] [--media] [--allow-remote] [--json]"
     );
-    eprintln!("       vista-host keyframe-control-test [--json]");
-    eprintln!("       vista-host media-stream --serve [--listen ADDR] [--frames N] [--json]");
-    eprintln!("       vista-host media-stream --connect ADDR --secret-hex HEX [--json]");
     eprintln!(
         "       vista-host protocol-client --connect ADDR --secret-hex HEX [--allow-input] [--action ID] [--json]"
     );
