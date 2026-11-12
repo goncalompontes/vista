@@ -127,6 +127,7 @@ Vista's bet is on *existing windows* and *native clients*, and it is early.
 - [Verification records](docs/e2e-verification.md) — what was run, on what
   hardware, and what it does not prove.
 - [Host diagnostics](docs/diagnostics.md) — the full one-shot command catalogue.
+- [Computer-use MCP](docs/computer-use.md) — the vphone/QEMU iOS workflow and host tools.
 - [ADRs](docs/adr/) — the decisions behind media transport, platform-neutral
   core, device enrollment, licensing, and schema ownership.
 - [Sill reference map](docs/sill-reference.md) — the UI/source map for the client
