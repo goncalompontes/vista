@@ -1,150 +1,168 @@
 # Vista
 
-Vista is an open-source native application-streaming platform for Linux hosts and Android, iPhone and iPad clients. It aims to stream **existing desktop windows** (starting with Wayland) and **independent remote application sessions**, with touch, keyboard, pointer, audio, and clipboard support. Its proposed future host-core architecture is OS-/compositor-neutral while implementation remains Linux-first; see [architecture review PR #67](https://github.com/goncalompontes/vista/pull/67).
+Vista streams your **existing Linux desktop windows** to native iOS and Android
+clients — instead of starting a separate virtual desktop and rebuilding your
+session inside it.
 
-Inspired by [Sill](https://github.com/Saffsanity/sill); not a fork or a drop-in Sill backend. For iOS/iPadOS development, use the [upstream Sill source-to-Vista map](docs/sill-reference.md) before reimplementing UI controls.
+[![Rust host](https://github.com/goncalompontes/vista/actions/workflows/rust.yml/badge.svg)](https://github.com/goncalompontes/vista/actions/workflows/rust.yml)
+[![iOS client](https://github.com/goncalompontes/vista/actions/workflows/ios.yml/badge.svg)](https://github.com/goncalompontes/vista/actions/workflows/ios.yml)
+[![Portable client checks](https://github.com/goncalompontes/vista/actions/workflows/client-portable.yml/badge.svg)](https://github.com/goncalompontes/vista/actions/workflows/client-portable.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 ## Status
 
-**Experimental end-to-end MVP, in progress.** The Rust host can pair with the
-iOS client, advertise Niri windows and virtual desktops, and send encrypted
-H.264 to the client's VideoToolbox view. On 2026-11-10, a vphone iOS VM paired
-with the host and displayed video for the active desktop and a virtual desktop
-in the same session. Selecting an individual window subsequently showed a
-stale frame; sustained playback and target switching still need investigation.
+**Experimental end-to-end MVP.** Verified on 2026-11-11: a real Niri
+host captured a 1920×1080 desktop, encoded it to H.264, and delivered it over an
+authenticated connection to an Android 36 emulator (654 frames over ~75 s) and to
+a Rust reference client (448 frames over 30 s, including two target switches).
+Touch and hardware-key input reached the host. The iOS client runs and plays
+video in a VM; it has not been exercised end to end through its UI.
 
-That stale-frame cause is now covered by tests: a stream discontinuity clears
-cached SPS/PPS and flushes queued sample buffers. The same cycle was recorded
-against the Rust reference client instead of an emulator: real Niri capture
-reached the client as authenticated H.264 at 1920×1080 for 30 seconds (448
-frames), and switching between the `desktop` and `workspace` targets restarted
-the producer cleanly. See [end-to-end verification](docs/e2e-verification.md)
-for the exact commands and numbers, and for what that run does not prove.
-Keyboard/pointer input and host actions are implemented but have not yet been
-verified end to end through the iOS UI. See the [test record and next steps](integrations/vista-computer-use/docs/END_TO_END.md#what-was-actually-exercised).
+## What works today
 
-The Android client is native Kotlin/Jetpack Compose and speaks the same v1
-control protocol: pairing, encrypted control records, live catalog, capability
-snapshot, semantic actions, authenticated H.264 playback through `MediaCodec`
-and touch-to-pointer input. Its debug APK builds from a clean tree and its wire
-core is checked against the shared Rust/Swift pairing vector in CI; it is the
-current MVP verification platform. On 2026-11-11 a headless Android 36 emulator
-streamed 1920×1080 from a real Niri host and the host accepted 12
-touch-derived input and hardware-key events ([evidence](docs/android-verification.md)).
-Drag/scroll, a typed text run, audio, clipboard and a physical-device run
-remain. iOS stays a
-separate SwiftUI app and is not a build dependency of Android.
+- **Window, workspace and desktop targets.** Pick one window, one workspace, or
+  the active desktop. Switching targets in one session restarts the producer
+  cleanly.
+- **Consented capture.** xdg-desktop-portal ScreenCast for a selected window,
+  with a `grim` full-output fallback. Consent is explicit and per run.
+- **H.264 with keyframe recovery.** NVENC preferred, with x264 and OpenH264
+  available. A decoder that loses sync requests a keyframe over the control
+  channel; the producer restarts the encoder and emits a fresh SPS/PPS IDR.
+- **An authenticated control channel.** Pre-shared-key pairing with mutual HMAC
+  confirmation, HKDF directional session keys, strict sequencing, and a bounded
+  AEAD record layer.
+- **Capability-driven actions and input.** The client receives a versioned
+  capability snapshot and can invoke described actions, send portable pointer
+  and key events, and commit text. Every action is re-authorised against a
+  revocable lease.
+- **Native clients.** iOS/iPadOS SwiftUI with a portable Swift core and
+  VideoToolbox playback; Android in Kotlin/Jetpack Compose with `MediaCodec`.
 
-The experimental `vista-host serve` is single-client and has no TLS. Keep it
-on loopback and treat its pairing invite as a secret. Its live capture path
-uses `grim` to repeatedly capture the active output; selecting a window focuses
-and fullscreens it, so window capture is not isolated. Encoding prefers NVIDIA
-NVENC when available, but screen capture uses the compositor's GPU. Independent
-application sessions, audio, clipboard, production discovery, and robust
-reconnection are not yet implemented.
+## Build and run the host
 
-Earlier capture and transport diagnostics are described in
-[capture verification](docs/capture-verification.md), [architecture](docs/architecture.md),
-and [the roadmap](docs/roadmap.md). They exercise different paths and do not
-by themselves establish the end-to-end MVP's reliability.
+Requirements: Linux with [Niri](https://github.com/YaLTeR/niri), Rust 1.88+, and
+the GStreamer development packages. Clients need iOS 17+ or Android 8+ (API 28).
 
-## Develop
-
-Requirements: Rust 1.88+ (edition 2024), a running Niri compositor and the `niri` executable on PATH. CI runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` on Ubuntu with the GStreamer development packages. The optional `capture-frame` diagnostic also needs GStreamer development libraries and plugins (`gstreamer-1.0`, `gstreamer-app-1.0`, `pipewiresrc`, `videoconvert` and `appsink`), PipeWire and a working desktop ScreenCast portal.
+On Debian/Ubuntu, install the build dependencies first:
 
 ```sh
-cd host
-cargo test
-cargo run -- doctor
-cargo run -- windows
-cargo run -- windows --json
-cargo run -- window 5 --json
-cargo run -- watch --json
-cargo run -- capabilities --json
-# Passive portal/compositor metadata, without chooser, pixels, or input:
-cargo run -- desktop-probe --json
-# Re-probe on changes and emit revision/generation updates:
-cargo run -- desktop-probe-watch --json
-# See docs/linux-desktop-probe.md for limitations and desktop test matrix.
-# Backend-agnostic capability/action contract diagnostic; no capture or input injection:
-cargo run -- capability-test --json
-# Session-bound capability/action dispatch through an in-memory paired session:
-cargo run -- control-dispatch-test --json
-# Read-only capability discovery for a live Niri window (no action is executed);
-# add --allow-window-actions/--allow-desktop-actions to show granted state:
-cargo run -- actions --window 5 --json
-# In-memory control-protocol pairing/session diagnostic; no network, capture or input:
-cargo run -- protocol-test --json
-# Localhost-only TCP pairing + encrypted control-record loopback; no external listener:
-cargo run -- protocol-loopback --json
-# One-shot control listener (prints a pairing offer, accepts one client):
-cargo run -- protocol-serve --confirm --listen 127.0.0.1:0 --json
-# Opt-in action policy over that listener (fake backend = no desktop side effects):
-cargo run -- protocol-serve --confirm --listen 127.0.0.1:0 --window 5 \
-  --allow-window-actions --allow-input --fake-actions --json
-# Reference client: video-only, or read the snapshot and send one action:
-cargo run -- protocol-client --connect 127.0.0.1:PORT --secret-hex HEX --json
-cargo run -- protocol-client --connect 127.0.0.1:PORT --secret-hex HEX \
-  --allow-input --action window.focus --json
-# Include a bounded Niri window catalog in the authenticated session:
-cargo run -- protocol-serve --confirm --listen 127.0.0.1:0 --catalog --json
-# Authenticated localhost control KeyframeRequest -> encoder restart:
-cargo run -- keyframe-control-test --json
-# Two-process encrypted synthetic H.264 media stream (localhost; test key):
-cargo run -- media-stream --serve --listen 127.0.0.1:0 --json
-cargo run -- media-stream --connect ADDR --secret-hex HEX --json
-# Read-only H.264 encoder factory discovery; no desktop capture or GPU encoding:
-cargo run -- encoders --json
-# Synthetic, permission-free bounded H.264 encode/decode test; requires working codec plugins:
-cargo run -- codec-test --json
-# Synthetic RGBA -> bounded StreamSession -> H.264 encoder bridge, no desktop access:
-cargo run -- bridge-test --json
-# Synthetic encode -> session -> sync gate -> AEAD/TCP media record -> decode, with one injected loss:
-cargo run -- sync-test --json
-# Opens a desktop consent chooser; does NOT capture frames:
-cargo run -- capture-consent --confirm --json
-# Opens a desktop consent chooser; attempts one in-memory frame (no file or network output):
-cargo run -- capture-frame --confirm --json
-# Opens a desktop consent chooser; inspects up to eight transient frames (no file or network output):
-cargo run -- capture-burst --confirm --json
-# Opens a desktop consent chooser; observes transient frames for at most 3 seconds or 120 frames:
-cargo run -- capture-monitor --confirm --json
-# Explicit window-only consent; transient PipeWire RGBA -> StreamSession -> H.264 (up to 8 frames / 5 seconds):
-cargo run -- capture-h264 --confirm [--window ID] [--seconds N] [--keyframe-at N] --json
-# Deterministic window lifecycle guard; no compositor or capture access:
-cargo run -- lifecycle-test --json
-# Explicit full-output wlr-screencopy fallback; captures the active output in memory and encodes/decodes one frame:
-cargo run -- capture-output --confirm --json
+sudo apt-get install -y --no-install-recommends \
+  build-essential pkg-config \
+  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+  gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
 ```
 
-Window IDs come from the active Niri session and can change after a window closes or the compositor restarts. `--json` supports programmatic consumers. When running through a tool or service with a sanitized environment, export `NIRI_SOCKET` from the active Niri session before invoking the host CLI.
+Then build, test, and inspect the live environment:
 
-## Computer-use MCP for the vphone client
+```sh
+git clone https://github.com/goncalompontes/vista
+cd vista/host
+cargo test --workspace
+cargo run -- doctor
+cargo run -- windows
+```
 
-The vphone/QEMU iOS-client workflow and the host service are also exposed
-through a reusable stdio MCP server at
-[`integrations/vista-computer-use`](integrations/vista-computer-use). It wraps
-the existing vphone-linux tools and `vista-host serve`/`live-client`, and ships
-Codex plugin/manifest examples plus an OpenCode config. Tools cover VM
-lifecycle/status, screenshots, accessibility trees, tap/swipe/key/text input,
-app install/launch/logs, guest networking, and the host reference-client path.
-See [computer-use.md](docs/computer-use.md) for the overview,
-[the package README](integrations/vista-computer-use/README.md) for setup, and
-[the end-to-end walkthrough](integrations/vista-computer-use/docs/END_TO_END.md)
-for pairing the real iOS client in the emulator.
+`doctor` reports whether the Niri socket is reachable. `windows` lists the
+targets you can stream. Then start the experimental host and pair a client:
+
+```sh
+cargo run -- serve --confirm --listen 127.0.0.1:0
+```
+
+It prints a one-shot pairing offer and accepts a single client.
+
+## What does not work yet
+
+- Audio and clipboard.
+- Discovery, multi-client support, reconnection guarantees and congestion
+  control.
+- TLS or certificate-based identity: the current pairing secret has no forward
+  secrecy, and `vista-host serve` has no TLS. Keep it on loopback.
+- Isolated application sessions. Window capture requires portal consent, and on
+  Niri selecting a window focuses and fullscreens it, so capture is not
+  isolated.
+- Physical-device runs on iOS or Android (emulator/VM only so far).
+
+If you need audio, clipboard, and a mature multi-client experience today, use
+[Sunshine](https://github.com/LizardByte/Sunshine) with
+[Moonlight](https://moonlight-stream.org/), or your desktop's RDP/VNC server.
+Vista's bet is on *existing windows* and *native clients*, and it is early.
+
+## How it differs
+
+- **Existing windows, not a rebuilt desktop.** Vista asks the compositor and the
+  desktop portal for a window that is already running. It does not spawn a
+  headless session and ask you to log in again.
+- **Compositor-aware without patching it.** Niri is read through its documented
+  JSON-over-Unix-socket IPC, with no GPL helper crate linked into the host. The
+  same interface is written to work for other desktops through portal
+  capabilities.
+- **A protocol, not a codec tunnel.** Capability snapshots, action descriptors,
+  lease-scoped input, and a versioned wire format with shared fixtures across
+  Rust, Swift and Kotlin. The protocol is documented in
+  [docs/protocol.md](docs/protocol.md).
+- **Evidence over adjectives.** Claims about working features name the run that
+  produced them and what that run did not prove. Where something is unverified,
+  the docs say so.
+
+## Client apps
+
+- **iOS/iPadOS** — SwiftUI app in `client/ios`, built with Xcode and
+  [XcodeGen](https://github.com/yonaskolb/XcodeGen). See
+  [client/README.md](client/README.md).
+- **Android** — native Kotlin/Compose app. Build the debug APK with
+  `client/android/build-android.sh`; JDK 17+ and Android SDK 36 required. See
+  [client/android/README.md](client/android/README.md).
+- **Rust reference client** — `vista-host live-client`, used for the recorded
+  end-to-end runs.
+- **Browser preview** — a UI iteration mock, not a client; see
+  [client/preview/README.md](client/preview/README.md).
+
+## Documentation
+
+- [Protocol and threat model](docs/protocol.md) — wire contract, pairing, states.
+- [Architecture](docs/architecture.md) and
+  [target architecture](docs/architecture-target.md).
+- [Delivery plan](docs/plan.md) and [roadmap](docs/roadmap.md).
+- [Verification records](docs/e2e-verification.md) — what was run, on what
+  hardware, and what it does not prove.
+- [Host diagnostics](docs/diagnostics.md) — the full one-shot command catalogue.
+- [ADRs](docs/adr/) — the decisions behind media transport, platform-neutral
+  core, device enrollment, licensing, and schema ownership.
+- [Sill reference map](docs/sill-reference.md) — the UI/source map for the client
+  work.
 
 ## Repository layout
 
-- `host/`: Rust Linux host service foundation, including Niri window discovery, live window catalog events, and read-only portal capability diagnostics.
-- `client/`: native iOS/iPadOS SwiftUI shell, native Android Kotlin/Compose client, portable Swift models, control protocol/pairing, and an [interactive Arch browser preview](client/preview/README.md) for UI iteration; see [client setup](client/README.md) and the [Android client](client/android/README.md).
-- `integrations/vista-computer-use/`: cross-client MCP server and Codex plugin for the vphone/QEMU iOS workflow and the Vista host service.
-- `docs/protocol.md`: versioned host/client control protocol, pairing, threat model and transport recommendation.
-- `docs/architecture.md`: host, transport, iOS, compositing and session architecture.
-- `docs/roadmap.md`: phased implementation and acceptance milestones.
-- `docs/adr/`: architecture decisions; [0001](docs/adr/0001-media-transport.md) covers the media record transport.
-- `docs/plan.md`: ordered delivery plan with phase gates and the next PR sequence.
-- `docs/capture-verification.md`: recorded real-hardware per-window capture evidence and limitations.
+- `host/` — Rust Linux host: Niri discovery and IPC, portal capture, H.264
+  encoding, control and media transport, capability/action dispatch, input.
+- `client/core/` — portable Swift package shared by the iOS app and tested on
+  Linux.
+- `client/ios/` — native iOS/iPadOS SwiftUI app.
+- `client/android/` — native Kotlin/Jetpack Compose app.
+- `client/preview/` — browser UI mock for iteration.
+- `integrations/vista-computer-use/` — cross-client MCP server for the
+  vphone/QEMU iOS workflow and the host service.
+- `docs/` — protocol, architecture, verification evidence, ADRs, plan.
+
+## Project
+
+- [Contributing](CONTRIBUTING.md) — setup, tests, commit conventions, DCO.
+- [Support](SUPPORT.md) — what is supported and how to ask.
+- [Security](SECURITY.md) — private reporting and known limitations.
+- [Governance](GOVERNANCE.md) — who decides, and the path to more maintainers.
+- [Release policy](RELEASES.md) and [changelog](CHANGELOG.md).
+- [Code of conduct](CODE_OF_CONDUCT.md).
+- **License:** [Apache-2.0](LICENSE), with [NOTICE](NOTICE) and
+  [third-party notices](THIRD_PARTY_NOTICES.md).
+
+Vista is inspired by [Sill](https://github.com/Saffsanity/sill); it is not a
+fork and not a drop-in Sill backend. Sill does not endorse Vista.
 
 ## Principles
 
-Native-first, least privilege, compositor-aware integration without patching Niri, clear separation of window discovery/capture/encoding/transport/input, and no false claims that isolated Wayland sessions can be created solely through an existing Niri window.
+Native-first. Least privilege. Compositor-aware integration without patching the
+compositor. A clear separation between discovery, capture, encoding, transport
+and input. No claim that an isolated Wayland session can be created from an
+existing compositor window. No false claims about reliability — if a path was
+not exercised, the docs say so.
